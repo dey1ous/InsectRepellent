@@ -9,6 +9,7 @@ import androidx.fragment.app.FragmentManager;
 import androidx.fragment.app.FragmentTransaction;
 
 import com.example.capstone2.databinding.ActivityMainBinding;
+import com.google.android.material.floatingactionbutton.FloatingActionButton;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -21,8 +22,10 @@ public class MainActivity extends AppCompatActivity {
         EdgeToEdge.enable(this);
         setContentView(binding.getRoot());
 
-
+        // Load default Home fragment
         replaceFragment(new HomeFragment());
+
+        // Handle bottom navigation
         binding.bottomNavigationView.setBackground(null);
         binding.bottomNavigationView.setOnItemSelectedListener(item -> {
             int itemId = item.getItemId();
@@ -36,6 +39,19 @@ public class MainActivity extends AppCompatActivity {
                 replaceFragment(new SettingsFragment());
             }
             return true;
+        });
+
+
+        FloatingActionButton fab = findViewById(R.id.fab_refresh);
+        fab.setOnClickListener(v -> {
+            Fragment currentFragment = getSupportFragmentManager().findFragmentById(R.id.frame_layout);
+
+            if (currentFragment != null && !(currentFragment instanceof SettingsFragment)) {
+                getSupportFragmentManager().beginTransaction()
+                        .detach(currentFragment)
+                        .attach(currentFragment)
+                        .commit();
+            }
         });
     }
 
