@@ -26,23 +26,23 @@
 
     <com.google.android.material.bottomappbar.BottomAppBar
         android:id="@+id/bottomAppBar"
+        style="@style/Widget.MaterialComponents.BottomAppBar.PrimarySurface"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
+        android:layout_height="98dp"
         android:layout_gravity="bottom"
         android:background="@color/white"
         app:fabAlignmentMode="center"
-        app:fabCradleMargin="20dp"
-        app:fabCradleRoundedCornerRadius="50dp"
-        style="@style/Widget.MaterialComponents.BottomAppBar.PrimarySurface" >
+        app:fabCradleMargin="15dp"
+        app:fabCradleRoundedCornerRadius="50dp">
 
-    <com.google.android.material.bottomnavigation.BottomNavigationView
-        android:id="@+id/bottomNavigationView"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:background="@color/white"
-        app:labelVisibilityMode="labeled"
-        app:menu="@menu/bottom_menu"
-    />
-</com.google.android.material.bottomappbar.BottomAppBar>
+        <com.google.android.material.bottomnavigation.BottomNavigationView
+            android:id="@+id/bottomNavigationView"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="@color/white"
+            app:itemIconSize="25dp"
+            app:labelVisibilityMode="labeled"
+            app:menu="@menu/bottom_menu" />
+    </com.google.android.material.bottomappbar.BottomAppBar>
 
     </androidx.coordinatorlayout.widget.CoordinatorLayout>
