@@ -5,4 +5,8 @@
     <color name="teal_200">#666666</color>
     <color name="teal_700">#018786</color>
     <color name="splash_background_color">#FCFCFD</color>
+    <color name="dark_green">#2E7D32</color>
+    <color name="light_green">#A5D6A7</color>
+    <color name="gray">#BDBDBD</color>
+    <color name="light_gray">#E0E0E0</color>
 </resources>

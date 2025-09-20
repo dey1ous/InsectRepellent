@@ -21,5 +21,47 @@
         android:textColor="@android:color/white"
         android:textSize="26sp"
         android:textStyle="bold" />
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:padding="15dp"
+        android:background="#FFFFFF"
+        android:layout_marginBottom="15dp"
+        android:elevation="2dp">
 
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Enable Notifications"
+            android:textSize="18sp"
+            android:textColor="#000"/>
+
+        <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/switchNotification"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            app:thumbTint="@color/switch_thumb"
+            app:trackTint="@color/switch_track"/>
+    </LinearLayout>
+
+    <LinearLayout
+        android:id="@+id/rowLeaveApp"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:padding="15dp"
+        android:background="#FFFFFF"
+        android:elevation="2dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Leave the App"
+            android:textSize="18sp"
+            android:textColor="#000"/>
+    </LinearLayout>
 </LinearLayout>
