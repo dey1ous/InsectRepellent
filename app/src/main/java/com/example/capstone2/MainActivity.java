@@ -1,6 +1,7 @@
 package com.example.capstone2;
 
 import android.os.Bundle;
+import android.widget.Toast;
 
 import androidx.activity.EdgeToEdge;
 import androidx.appcompat.app.AppCompatActivity;
@@ -14,6 +15,7 @@ import com.google.android.material.floatingactionbutton.FloatingActionButton;
 public class MainActivity extends AppCompatActivity {
 
     ActivityMainBinding binding;
+    private String deviceQr;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -21,6 +23,11 @@ public class MainActivity extends AppCompatActivity {
         binding = ActivityMainBinding.inflate(getLayoutInflater());
         EdgeToEdge.enable(this);
         setContentView(binding.getRoot());
+
+        deviceQr = getIntent().getStringExtra("DEVICE_QR");
+        if (deviceQr != null) {
+            Toast.makeText(this, "Device QR: " + deviceQr, Toast.LENGTH_LONG).show();
+        }
 
         // Load default Home fragment
         replaceFragment(new HomeFragment());
@@ -41,11 +48,9 @@ public class MainActivity extends AppCompatActivity {
             return true;
         });
 
-
         FloatingActionButton fab = findViewById(R.id.fab_refresh);
         fab.setOnClickListener(v -> {
             Fragment currentFragment = getSupportFragmentManager().findFragmentById(R.id.frame_layout);
-
             if (currentFragment != null && !(currentFragment instanceof SettingsFragment)) {
                 getSupportFragmentManager().beginTransaction()
                         .detach(currentFragment)
@@ -61,4 +66,5 @@ public class MainActivity extends AppCompatActivity {
         fragmentTransaction.replace(R.id.frame_layout, fragment);
         fragmentTransaction.commit();
     }
+    
 }

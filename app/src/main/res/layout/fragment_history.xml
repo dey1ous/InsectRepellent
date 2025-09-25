@@ -29,7 +29,7 @@
         android:hint="Select Date"
         style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox.ExposedDropdownMenu">
 
-        <AutoCompleteTextView
+        <androidx.appcompat.widget.AppCompatAutoCompleteTextView
             android:id="@+id/dropdownMenu"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
