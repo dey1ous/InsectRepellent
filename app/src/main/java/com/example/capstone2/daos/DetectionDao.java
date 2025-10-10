@@ -19,4 +19,10 @@ public interface DetectionDao {
 
     @Query("SELECT * FROM detections WHERE deviceQr = :qr ORDER BY timestamp DESC")
     List<Detection> getDetectionsByDevice(String qr);
+
+    @Query("SELECT SUM(insectCount) FROM detections " +
+            "WHERE deviceQr = :qr AND date(timestamp) = date('now', 'localtime')")
+    Integer getTodayTotalCount(String qr);
+    @Query("SELECT * FROM detections WHERE date(timestamp) = date('now', 'localtime') ORDER BY timestamp ASC")
+    List<Detection> getTodayDetections();
 }

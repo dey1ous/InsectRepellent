@@ -17,7 +17,6 @@ import com.github.mikephil.charting.components.XAxis;
 import com.github.mikephil.charting.data.Entry;
 import com.github.mikephil.charting.data.LineData;
 import com.github.mikephil.charting.data.LineDataSet;
-import com.google.android.material.textfield.TextInputLayout;
 
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
@@ -38,7 +37,6 @@ public class HistoryFragment extends Fragment {
                              Bundle savedInstanceState) {
         View view = inflater.inflate(R.layout.fragment_history, container, false);
 
-        // Initialize views
         historyGraph = view.findViewById(R.id.historyGraph);
         weekCount = view.findViewById(R.id.weekCount);
         dayCount = view.findViewById(R.id.dayCount);
@@ -51,6 +49,13 @@ public class HistoryFragment extends Fragment {
         return view;
     }
 
+    /**
+     * Public method to reload dropdown anytime
+     */
+    public void reloadDropdown() {
+        loadDatesDropdown();
+    }
+
     private void loadDatesDropdown() {
         new Thread(() -> {
             List<Detection> allDetections = db.detectionDao().getAllDetections();
@@ -61,17 +66,27 @@ public class HistoryFragment extends Fragment {
                 try {
                     Date detectionDate = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
                             .parse(d.getTimestamp());
-                    String dateStr = sdf.format(detectionDate);
-                    if (!dates.contains(dateStr)) dates.add(dateStr);
+                    if (detectionDate != null) {
+                        String dateStr = sdf.format(detectionDate);
+                        if (!dates.contains(dateStr)) dates.add(dateStr);
+                    }
                 } catch (ParseException e) {
                     e.printStackTrace();
                 }
             }
 
+            // Ensure today is included
+            String today = sdf.format(new Date());
+            if (!dates.contains(today)) dates.add(today);
+
             requireActivity().runOnUiThread(() -> {
                 ArrayAdapter<String> adapter = new ArrayAdapter<>(requireContext(),
                         android.R.layout.simple_dropdown_item_1line, dates);
                 dropdownMenu.setAdapter(adapter);
+
+                // Auto-select today
+                dropdownMenu.setText(today, false);
+                loadGraphData(today);
 
                 dropdownMenu.setOnItemClickListener((parent, view, position, id) -> {
                     String selectedDate = adapter.getItem(position);
@@ -85,23 +100,13 @@ public class HistoryFragment extends Fragment {
         new Thread(() -> {
             SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault());
             SimpleDateFormat timestampFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault());
-            long startOfDay = 0;
-            long endOfDay = 0;
 
-            try {
-                Date date = dateFormat.parse(selectedDate);
-                if (date != null) {
-                    startOfDay = date.getTime();
-                    endOfDay = startOfDay + 24L * 60 * 60 * 1000 - 1;
-                }
-            } catch (ParseException e) {
-                e.printStackTrace();
-            }
+            long oneWeekAgo = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000;
+            int weeklySum = 0;
+            int dailySum = 0;
 
             List<Detection> allDetections = db.detectionDao().getAllDetections();
             List<Detection> dailyDetections = new ArrayList<>();
-            long oneWeekAgo = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000;
-            int weeklyCounter = 0;
 
             for (Detection d : allDetections) {
                 try {
@@ -110,31 +115,33 @@ public class HistoryFragment extends Fragment {
 
                     long timeMillis = detectionDate.getTime();
 
-                    if (timeMillis >= startOfDay && timeMillis <= endOfDay) dailyDetections.add(d);
-                    if (timeMillis >= oneWeekAgo) weeklyCounter++;
+                    if (selectedDate.equals(dateFormat.format(detectionDate))) {
+                        dailySum += d.getInsectCount();
+                        dailyDetections.add(d);
+                    }
+
+                    if (timeMillis >= oneWeekAgo) weeklySum += d.getInsectCount();
 
                 } catch (ParseException e) {
                     e.printStackTrace();
                 }
             }
 
-            final int finalWeeklyCount = weeklyCounter;
-            final int dailyCountValue = dailyDetections.size();
-
-            // Prepare chart entries
-            List<Entry> entries = new ArrayList<>();
-            for (int i = 0; i < dailyDetections.size(); i++) {
-                entries.add(new Entry(i, dailyDetections.get(i).getInsectCount()));
-            }
-
-            LineDataSet dataSet = new LineDataSet(entries, "Insect Detections");
-            dataSet.setColor(getResources().getColor(R.color.teal_700, null));
-            dataSet.setValueTextColor(getResources().getColor(R.color.black, null));
-            LineData lineData = new LineData(dataSet);
-
+            int finalDailySum = dailySum;
+            int finalWeeklySum = weeklySum;
             requireActivity().runOnUiThread(() -> {
-                dayCount.setText(String.valueOf(dailyCountValue));
-                weekCount.setText(String.valueOf(finalWeeklyCount));
+                dayCount.setText(String.valueOf(finalDailySum));
+                weekCount.setText(String.valueOf(finalWeeklySum));
+
+                List<Entry> entries = new ArrayList<>();
+                for (int i = 0; i < dailyDetections.size(); i++) {
+                    entries.add(new Entry(i, dailyDetections.get(i).getInsectCount()));
+                }
+
+                LineDataSet dataSet = new LineDataSet(entries, "Insect Detections");
+                dataSet.setColor(getResources().getColor(R.color.teal_700, null));
+                dataSet.setValueTextColor(getResources().getColor(R.color.black, null));
+                LineData lineData = new LineData(dataSet);
 
                 historyGraph.setData(lineData);
                 historyGraph.getDescription().setEnabled(false);

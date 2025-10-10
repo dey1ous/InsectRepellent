@@ -13,7 +13,6 @@ import com.example.capstone2.database.AppDatabase;
 import com.example.capstone2.entities.Detection;
 
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
@@ -22,6 +21,7 @@ public class HomeFragment extends Fragment {
 
     private TextView mosquitoCount, systemStatus, solutionStatus;
     private AppDatabase db;
+    private String deviceQr;
 
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container,
@@ -32,72 +32,53 @@ public class HomeFragment extends Fragment {
         systemStatus = view.findViewById(R.id.systemStatus);
         solutionStatus = view.findViewById(R.id.solutionStatus);
 
+        systemStatus.setText("System Status: Active");
+        solutionStatus.setText("Solution Status: Low");
+
         db = AppDatabase.getInstance(requireContext());
 
+        // Optional: set deviceQr from arguments if passed
+        if (getArguments() != null) {
+            deviceQr = getArguments().getString("DEVICE_QR");
+        }
+
+        // Load today’s insect count
         loadTodayInsectCount();
-        updateSystemStatus();
-        updateSolutionStatus();
 
         return view;
     }
 
-    private void loadTodayInsectCount() {
+    public void loadTodayInsectCount() {
         new Thread(() -> {
-            List<Detection> allDetections = db.detectionDao().getAllDetections();
-            int todayCount = 0;
+            try {
+                int totalToday = db.detectionDao().getTodayTotalCount(deviceQr != null ? deviceQr : "UNKNOWN");
 
-            SimpleDateFormat sdfDate = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault());
-            String todayStr = sdfDate.format(new Date());
-
-            SimpleDateFormat sdfTimestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault());
-
-            for (Detection d : allDetections) {
-                try {
-                    Date detectionDate = sdfTimestamp.parse(d.getTimestamp());
-                    if (detectionDate != null && sdfDate.format(detectionDate).equals(todayStr)) {
-                        todayCount += d.getInsectCount();
-                    }
-                } catch (Exception e) {
-                    e.printStackTrace();
+                // Update UI on main thread
+                if (getActivity() != null) {
+                    getActivity().runOnUiThread(() -> updateInsectCount(totalToday));
                 }
+            } catch (Exception e) {
+                e.printStackTrace();
             }
-
-            final int finalCount = todayCount;
-            requireActivity().runOnUiThread(() -> mosquitoCount.setText(String.valueOf(finalCount)));
         }).start();
     }
 
-    private void updateSystemStatus() {
-        // Replace this with your actual logic for system status
-        boolean systemActive = true; // Example: fetch from DB or sensor
-        systemStatus.setText("System Status: " + (systemActive ? "Active" : "Inactive"));
-        systemStatus.setTextColor(systemActive ?
-                getResources().getColor(android.R.color.holo_green_dark) :
-                getResources().getColor(android.R.color.holo_red_dark));
-    }
+    public void updateInsectCount(int count) {
+        if (getActivity() != null && mosquitoCount != null && solutionStatus != null) {
+            getActivity().runOnUiThread(() -> {
+                mosquitoCount.setText(String.valueOf(count));
 
-    private void updateSolutionStatus() {
-        // Replace this with your actual solution status logic
-        int solutionLevel = 3; // Example: 3 = High, 2 = Medium, 1 = Low
-
-        String statusText;
-        int color;
-
-        switch (solutionLevel) {
-            case 3:
-                statusText = "High";
-                color = getResources().getColor(android.R.color.holo_green_dark);
-                break;
-            case 2:
-                statusText = "Medium";
-                color = getResources().getColor(android.R.color.holo_orange_dark);
-                break;
-            default:
-                statusText = "Low";
-                color = getResources().getColor(android.R.color.holo_red_dark);
+                if (count > 800) {
+                    solutionStatus.setText("Solution Status: High");
+                    solutionStatus.setTextColor(getResources().getColor(android.R.color.holo_red_dark));
+                } else if (count > 500) {
+                    solutionStatus.setText("Solution Status: Medium");
+                    solutionStatus.setTextColor(getResources().getColor(android.R.color.holo_orange_dark));
+                } else {
+                    solutionStatus.setText("Solution Status: Low");
+                    solutionStatus.setTextColor(getResources().getColor(android.R.color.holo_green_dark));
+                }
+            });
         }
-
-        solutionStatus.setText("Solution Status: " + statusText);
-        solutionStatus.setTextColor(color);
     }
 }
