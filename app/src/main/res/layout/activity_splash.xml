@@ -4,31 +4,21 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="#000000">
+    android:background="#000000">   <!-- fixed invalid color code "#ff" -->
 
     <ImageView
         android:id="@+id/splashLogo"
         android:layout_width="0dp"
         android:layout_height="0dp"
+        android:layout_margin="32dp"
+        android:adjustViewBounds="true"
         android:contentDescription="@string/app_logo"
-        android:background="@drawable/logo"
         android:scaleType="fitCenter"
-        app:layout_constraintWidth_percent="0.6"
+        android:src="@mipmap/logo1_round"
+        app:layout_constraintWidth_percent="0.5"
         app:layout_constraintDimensionRatio="1:1"
         app:layout_constraintTop_toTopOf="parent"
-        app:layout_constraintBottom_toTopOf="@id/progressBar"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintVertical_chainStyle="packed"/>
-
-    <ProgressBar
-        android:id="@+id/progressBar"
-        style="?android:attr/progressBarStyleLarge"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        app:layout_constraintTop_toBottomOf="@id/splashLogo"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintBottom_toBottomOf="parent"
-        android:layout_marginTop="16dp"/>
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
 </androidx.constraintlayout.widget.ConstraintLayout>

@@ -14,19 +14,31 @@ import com.example.capstone2.entities.Detection;
 @Database(entities = {Device.class, Detection.class}, version = 1, exportSchema = false)
 public abstract class AppDatabase extends RoomDatabase {
 
-    private static AppDatabase instance;
+    // Singleton instance (only one database instance throughout the app)
+    private static volatile AppDatabase INSTANCE;
 
+    // Abstract DAOs
     public abstract DeviceDao deviceDao();
     public abstract DetectionDao detectionDao();
 
-    public static synchronized AppDatabase getInstance(Context context) {
-        if (instance == null) {
-            instance = Room.databaseBuilder(
-                    context.getApplicationContext(),
-                    AppDatabase.class,
-                    "capstone_db"
-            ).fallbackToDestructiveMigration().build();
+    // Get database instance
+    public static AppDatabase getInstance(Context context) {
+        if (INSTANCE == null) {
+            synchronized (AppDatabase.class) {
+                if (INSTANCE == null) {
+                    INSTANCE = Room.databaseBuilder(
+                                    context.getApplicationContext(),
+                                    AppDatabase.class,
+                                    "capstone_db"
+                            )
+                            // Use this only for development (it deletes data on schema change)
+                            .fallbackToDestructiveMigration()
+                            // Optional: allow database access on main thread (for quick tests only)
+                            // .allowMainThreadQueries()
+                            .build();
+                }
+            }
         }
-        return instance;
+        return INSTANCE;
     }
 }

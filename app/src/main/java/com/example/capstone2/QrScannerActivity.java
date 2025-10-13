@@ -19,6 +19,8 @@ import androidx.camera.view.PreviewView;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
+import com.example.capstone2.database.AppDatabase;
+import com.example.capstone2.entities.Device;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.mlkit.vision.barcode.BarcodeScanner;
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions;
@@ -35,6 +37,7 @@ public class QrScannerActivity extends AppCompatActivity {
 
     private PreviewView previewView;
     private BarcodeScanner scanner;
+    private boolean isProcessing = false; // Prevent duplicate scans
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -44,19 +47,18 @@ public class QrScannerActivity extends AppCompatActivity {
         previewView = findViewById(R.id.previewView);
         ImageButton btnBack = findViewById(R.id.btnBack);
 
-        // Back button closes scanner without result
         btnBack.setOnClickListener(v -> {
-            setResult(RESULT_CANCELED); // optional
+            setResult(RESULT_CANCELED);
             finish();
         });
 
-        // Configure ML Kit for QR codes
+        // Configure QR scanner for QR codes only
         BarcodeScannerOptions options = new BarcodeScannerOptions.Builder()
                 .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
                 .build();
         scanner = BarcodeScanning.getClient(options);
 
-        // Check camera permission
+        // Request camera permission if needed
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
                 != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(
@@ -95,11 +97,9 @@ public class QrScannerActivity extends AppCompatActivity {
             try {
                 ProcessCameraProvider cameraProvider = cameraProviderFuture.get();
 
-                // Preview
                 Preview preview = new Preview.Builder().build();
                 preview.setSurfaceProvider(previewView.getSurfaceProvider());
 
-                // Analysis
                 ImageAnalysis analysis = new ImageAnalysis.Builder()
                         .setTargetResolution(new Size(1280, 720))
                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -107,7 +107,6 @@ public class QrScannerActivity extends AppCompatActivity {
 
                 analysis.setAnalyzer(ContextCompat.getMainExecutor(this), this::processImage);
 
-                // Bind to lifecycle
                 cameraProvider.unbindAll();
                 cameraProvider.bindToLifecycle(
                         this,
@@ -123,35 +122,84 @@ public class QrScannerActivity extends AppCompatActivity {
     }
 
     private void processImage(ImageProxy imageProxy) {
+        if (isProcessing) {
+            imageProxy.close();
+            return;
+        }
+
         @SuppressWarnings("UnsafeOptInUsageError")
         InputImage image = InputImage.fromMediaImage(
                 imageProxy.getImage(),
                 imageProxy.getImageInfo().getRotationDegrees()
         );
 
+        isProcessing = true;
+
         scanner.process(image)
                 .addOnSuccessListener(barcodes -> {
                     if (!barcodes.isEmpty()) {
                         handleResult(barcodes);
+                    } else {
+                        imageProxy.close();
+                        isProcessing = false;
                     }
-                    imageProxy.close();
                 })
-                .addOnFailureListener(e -> imageProxy.close());
+                .addOnFailureListener(e -> {
+                    imageProxy.close();
+                    isProcessing = false;
+                });
     }
 
     private void handleResult(List<Barcode> barcodes) {
-        if (!barcodes.isEmpty()) {
-            String qrData = barcodes.get(0).getRawValue();
-
-            // Show temporary feedback
-            Toast.makeText(this, "QR Code: " + qrData, Toast.LENGTH_SHORT).show();
-
-            // Return result to calling activity
-            Intent resultIntent = new Intent();
-            resultIntent.putExtra("QR_RESULT", qrData);
-            setResult(RESULT_OK, resultIntent);
-
-            finish();
+        if (barcodes.isEmpty()) {
+            isProcessing = false;
+            return;
         }
+
+        String qrData = barcodes.get(0).getRawValue();
+        AppDatabase db = AppDatabase.getInstance(getApplicationContext());
+
+        new Thread(() -> {
+            Device existingDevice = db.deviceDao().getRegisteredDevice();
+
+            runOnUiThread(() -> {
+                if (isFinishing()) return;
+
+                if (existingDevice != null) {
+                    new androidx.appcompat.app.AlertDialog.Builder(QrScannerActivity.this)
+                            .setCancelable(false)
+                            .setTitle("Replace QR Code?")
+                            .setMessage("A QR code is already saved:\n\n" + existingDevice.getQrCode() +
+                                    "\n\nDo you want to replace it with:\n" + qrData + "?")
+                            .setPositiveButton("Replace", (dialog, which) -> {
+                                new Thread(() -> {
+                                    db.deviceDao().deleteAll();
+                                    db.deviceDao().insert(new Device("Scanned Device", qrData));
+                                }).start();
+
+                                Intent resultIntent = new Intent();
+                                resultIntent.putExtra("QR_RESULT", qrData);
+                                setResult(RESULT_OK, resultIntent);
+                                finish();
+                            })
+                            .setNegativeButton("Cancel", (dialog, which) -> {
+                                dialog.dismiss();
+                                isProcessing = false; // Allow rescanning again
+                            })
+                            .show();
+                } else {
+                    new Thread(() -> {
+                        db.deviceDao().insert(new Device("Scanned Device", qrData));
+                    }).start();
+
+                    Toast.makeText(this, "QR Code saved: " + qrData, Toast.LENGTH_SHORT).show();
+
+                    Intent resultIntent = new Intent();
+                    resultIntent.putExtra("QR_RESULT", qrData);
+                    setResult(RESULT_OK, resultIntent);
+                    finish();
+                }
+            });
+        }).start();
     }
 }

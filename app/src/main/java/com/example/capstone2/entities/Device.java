@@ -1,6 +1,7 @@
 package com.example.capstone2.entities;
 
 import androidx.room.Entity;
+import androidx.room.Ignore;
 import androidx.room.PrimaryKey;
 
 @Entity(tableName = "devices")
@@ -11,6 +12,14 @@ public class Device {
     private String deviceName;
     private String qrCode;
 
+    // Room will use this constructor
+    public Device(String qrCode) {
+        this.deviceName = "Unknown"; // default name
+        this.qrCode = qrCode;
+    }
+
+    // Ignore this constructor for Room
+    @Ignore
     public Device(String deviceName, String qrCode) {
         this.deviceName = deviceName;
         this.qrCode = qrCode;
