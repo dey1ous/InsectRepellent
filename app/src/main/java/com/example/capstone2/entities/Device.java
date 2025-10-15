@@ -6,23 +6,24 @@ import androidx.room.PrimaryKey;
 
 @Entity(tableName = "devices")
 public class Device {
+
     @PrimaryKey(autoGenerate = true)
     private int id;
 
     private String deviceName;
-    private String qrCode;
+    private String macAddress; // ✅ use MAC address instead of QR
 
-    // Room will use this constructor
-    public Device(String qrCode) {
-        this.deviceName = "Unknown"; // default name
-        this.qrCode = qrCode;
+    // Constructor used by Room
+    public Device(String macAddress) {
+        this.deviceName = "HC-05"; // default name for your module
+        this.macAddress = macAddress;
     }
 
-    // Ignore this constructor for Room
+    // Optional constructor (ignored by Room)
     @Ignore
-    public Device(String deviceName, String qrCode) {
+    public Device(String deviceName, String macAddress) {
         this.deviceName = deviceName;
-        this.qrCode = qrCode;
+        this.macAddress = macAddress;
     }
 
     // Getters and setters
@@ -32,6 +33,6 @@ public class Device {
     public String getDeviceName() { return deviceName; }
     public void setDeviceName(String deviceName) { this.deviceName = deviceName; }
 
-    public String getQrCode() { return qrCode; }
-    public void setQrCode(String qrCode) { this.qrCode = qrCode; }
+    public String getMacAddress() { return macAddress; }
+    public void setMacAddress(String macAddress) { this.macAddress = macAddress; }
 }

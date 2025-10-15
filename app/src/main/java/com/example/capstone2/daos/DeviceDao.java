@@ -20,15 +20,15 @@ public interface DeviceDao {
     @Query("SELECT * FROM devices LIMIT 1")
     Device getRegisteredDevice();
 
-    // Find a device by its QR code
-    @Query("SELECT * FROM devices WHERE qrCode = :qr LIMIT 1")
-    Device findByQr(String qr);
+    // Find a device by its MAC address
+    @Query("SELECT * FROM devices WHERE macAddress = :mac LIMIT 1")
+    Device findByMac(String mac);
 
     // Delete all devices
     @Query("DELETE FROM devices")
     void deleteAll();
 
-    // Optional: Delete a specific device
+    // Delete a specific device
     @Delete
     void delete(Device device);
 }

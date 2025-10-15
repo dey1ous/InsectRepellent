@@ -17,12 +17,14 @@ public interface DetectionDao {
     @Query("SELECT * FROM detections ORDER BY timestamp DESC")
     List<Detection> getAllDetections();
 
-    @Query("SELECT * FROM detections WHERE deviceQr = :qr ORDER BY timestamp DESC")
-    List<Detection> getDetectionsByDevice(String qr);
+    // Filter by MAC instead of QR
+    @Query("SELECT * FROM detections WHERE deviceMac = :mac ORDER BY timestamp DESC")
+    List<Detection> getDetectionsByDevice(String mac);
 
     @Query("SELECT SUM(insectCount) FROM detections " +
-            "WHERE deviceQr = :qr AND date(timestamp) = date('now', 'localtime')")
-    Integer getTodayTotalCount(String qr);
+            "WHERE deviceMac = :mac AND date(timestamp) = date('now', 'localtime')")
+    Integer getTodayTotalCount(String mac);
+
     @Query("SELECT * FROM detections WHERE date(timestamp) = date('now', 'localtime') ORDER BY timestamp ASC")
     List<Detection> getTodayDetections();
 }

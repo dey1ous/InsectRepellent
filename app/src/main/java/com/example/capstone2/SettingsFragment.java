@@ -1,9 +1,7 @@
 package com.example.capstone2;
 
 import android.Manifest;
-import android.app.NotificationManager;
 import android.content.DialogInterface;
-import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -13,8 +11,6 @@ import android.view.ViewGroup;
 import android.widget.LinearLayout;
 import android.widget.Toast;
 
-import androidx.activity.result.ActivityResultLauncher;
-import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AlertDialog;
@@ -26,8 +22,7 @@ import com.google.android.material.materialswitch.MaterialSwitch;
 
 public class SettingsFragment extends Fragment {
 
-    private ActivityResultLauncher<Intent> qrScannerLauncher;
-    private ActivityResultLauncher<String> requestNotificationPermissionLauncher;
+    private androidx.activity.result.ActivityResultLauncher<String> requestNotificationPermissionLauncher;
 
     @Override
     public View onCreateView(LayoutInflater inflater, ViewGroup container,
@@ -41,23 +36,10 @@ public class SettingsFragment extends Fragment {
 
         MaterialSwitch switchNotification = view.findViewById(R.id.switchNotification);
         LinearLayout rowLeaveApp = view.findViewById(R.id.rowLeaveApp);
-        LinearLayout rowScanQr = view.findViewById(R.id.rowScanQr);
 
-        qrScannerLauncher = registerForActivityResult(
-                new ActivityResultContracts.StartActivityForResult(),
-                result -> {
-                    if (result.getResultCode() == getActivity().RESULT_OK && result.getData() != null) {
-                        String qrData = result.getData().getStringExtra("QR_RESULT");
-                        if (qrData != null) {
-                            Toast.makeText(requireContext(), "Scanned QR: " + qrData, Toast.LENGTH_SHORT).show();
-                        }
-                    }
-                }
-        );
-
-        // Permission request launcher
+        // Permission request launcher for notifications
         requestNotificationPermissionLauncher = registerForActivityResult(
-                new ActivityResultContracts.RequestPermission(),
+                new androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
                 isGranted -> {
                     if (isGranted) {
                         Toast.makeText(requireContext(), "Notification permission granted", Toast.LENGTH_SHORT).show();
@@ -67,6 +49,7 @@ public class SettingsFragment extends Fragment {
                 }
         );
 
+        // 🔔 Notification switch logic
         switchNotification.setOnCheckedChangeListener((buttonView, isChecked) -> {
             if (isChecked) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -87,6 +70,7 @@ public class SettingsFragment extends Fragment {
             }
         });
 
+        // 🚪 Leave App confirmation
         rowLeaveApp.setOnClickListener(v -> {
             AlertDialog dialog = new MaterialAlertDialogBuilder(requireContext())
                     .setTitle("Exit App")
@@ -103,11 +87,6 @@ public class SettingsFragment extends Fragment {
             });
 
             dialog.show();
-        });
-
-        rowScanQr.setOnClickListener(v -> {
-            Intent intent = new Intent(requireContext(), QrScannerActivity.class);
-            qrScannerLauncher.launch(intent);
         });
     }
 }

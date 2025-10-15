@@ -5,11 +5,13 @@ import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothSocket;
 import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 import android.widget.Toast;
 
 import androidx.activity.EdgeToEdge;
+import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.fragment.app.Fragment;
@@ -18,7 +20,6 @@ import androidx.fragment.app.FragmentTransaction;
 
 import com.example.capstone2.database.AppDatabase;
 import com.example.capstone2.databinding.ActivityMainBinding;
-import com.example.capstone2.entities.Device;
 import com.example.capstone2.entities.Detection;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
 
@@ -26,34 +27,31 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.lang.reflect.Method;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
 import java.util.UUID;
 
-/**
- * Main Activity
- * Handles fragment navigation, Bluetooth connection, and data syncing.
- */
 public class MainActivity extends AppCompatActivity {
+
+    private static final String TAG = "HC05_DEBUG";
+    private static final UUID HC05_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
+    private static final int REQUEST_BT_PERMISSIONS = 101;
 
     private ActivityMainBinding binding;
     private AppDatabase db;
+    private BluetoothAdapter adapter;
+    private BluetoothSocket socket;
 
-    private String macAddress;       // MAC address from QR or DB
-    private BluetoothSocket socket;  // Active HC-05 socket
-    private boolean readingData = false;
+    private boolean isReading = false;
+    private String connectedMac;
+    private int latestCount = 0;
 
-    private static final UUID HC05_UUID =
-            UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
-
-    // Fragments
     private HomeFragment homeFragment;
-    private AboutFragment aboutFragment;
+    private BluetoothFragment bluetoothFragment;
     private HistoryFragment historyFragment;
     private SettingsFragment settingsFragment;
-
-    private int latestCount = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -63,49 +61,157 @@ public class MainActivity extends AppCompatActivity {
         setContentView(binding.getRoot());
 
         db = AppDatabase.getInstance(this);
+        adapter = BluetoothAdapter.getDefaultAdapter();
 
-        // Initialize fragments
         homeFragment = new HomeFragment();
-        aboutFragment = new AboutFragment();
+        bluetoothFragment = new BluetoothFragment();
         historyFragment = new HistoryFragment();
         settingsFragment = new SettingsFragment();
 
-        // Load initial fragment
         replaceFragment(homeFragment, "HOME_FRAGMENT");
+        setupBottomNavigation();
+        setupFloatingButton();
+    }
 
-        // Try to get MAC address from QR
-        macAddress = getIntent().getStringExtra("DEVICE_QR");
-        if (macAddress != null && !macAddress.isEmpty()) {
-            saveDeviceIfNew(macAddress);
-            Toast.makeText(this, "Scanned device: " + macAddress, Toast.LENGTH_LONG).show();
-            connectToBluetooth(macAddress);
-        } else {
-            // Load saved MAC from DB if available
-            new Thread(() -> {
-                Device savedDevice = db.deviceDao().getRegisteredDevice();
-                runOnUiThread(() -> {
-                    if (savedDevice != null) {
-                        macAddress = savedDevice.getQrCode();
-                        Toast.makeText(this, "Loaded saved device: " + macAddress, Toast.LENGTH_LONG).show();
-                        connectToBluetooth(macAddress);
-                    } else {
-                        Toast.makeText(this, "No device found. Please scan QR first.", Toast.LENGTH_LONG).show();
-                    }
-                });
-            }).start();
+    // ---------------------- BLUETOOTH ---------------------- //
+
+    public void connectToDevice(String macAddress) {
+        if (adapter == null) {
+            showToast("Bluetooth not supported.");
+            return;
         }
 
-        fetchLatestCount();
+        if (!adapter.isEnabled()) {
+            showToast("Please enable Bluetooth first.");
+            return;
+        }
 
-        // Bottom Navigation
+        if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
+            requestBluetoothPermissions();
+            return;
+        }
+
+        connectedMac = macAddress;
+
+        new Thread(() -> {
+            try {
+                BluetoothDevice device = adapter.getRemoteDevice(macAddress);
+                connectWithFallback(device);
+            } catch (IllegalArgumentException e) {
+                runOnUiThread(() -> showToast("Invalid MAC address."));
+            }
+        }).start();
+    }
+
+    private void connectWithFallback(BluetoothDevice device) {
+        try {
+            closeSocket();
+            if (adapter.isDiscovering()) adapter.cancelDiscovery();
+
+            // Primary socket attempt
+            socket = device.createRfcommSocketToServiceRecord(HC05_UUID);
+            socket.connect();
+            runOnUiThread(() -> showToast("✅ Connected to " + device.getName()));
+            startReading(socket);
+
+        } catch (IOException e) {
+            Log.w(TAG, "Primary failed, trying fallback: " + e.getMessage());
+            try {
+                Method m = device.getClass().getMethod("createRfcommSocket", int.class);
+                BluetoothSocket fallback = (BluetoothSocket) m.invoke(device, 1);
+                fallback.connect();
+                socket = fallback;
+                runOnUiThread(() -> showToast("✅ Connected (fallback)"));
+                startReading(socket);
+            } catch (Exception ex) {
+                Log.e(TAG, "Fallback failed: " + ex.getMessage());
+                runOnUiThread(() -> showToast("Connection failed. Try again."));
+                closeSocket();
+            }
+        }
+    }
+
+    private void startReading(BluetoothSocket socket) {
+        isReading = true;
+        new Thread(() -> {
+            try (InputStream in = socket.getInputStream();
+                 BufferedReader reader = new BufferedReader(new InputStreamReader(in))) {
+
+                String line;
+                while (isReading && (line = reader.readLine()) != null) {
+                    handleIncomingData(line.trim());
+                }
+
+            } catch (IOException e) {
+                Log.e(TAG, "Disconnected: " + e.getMessage());
+                runOnUiThread(() -> showToast("Device disconnected."));
+                isReading = false;
+            }
+        }).start();
+    }
+
+    private void handleIncomingData(String line) {
+        try {
+            if (line.contains(",")) {
+                String[] parts = line.split(",");
+                int code = Integer.parseInt(parts[0].trim());
+                int count = Integer.parseInt(parts[1].trim());
+
+                if (code == 2) {
+                    latestCount = count;
+                    String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(new Date());
+                    Detection detection = new Detection(connectedMac, timestamp, count);
+                    new Thread(() -> db.detectionDao().insert(detection)).start();
+                    runOnUiThread(() -> homeFragment.updateInsectCount(count));
+                }
+            } else {
+                int code = Integer.parseInt(line);
+                runOnUiThread(() -> {
+                    if (code == 0 || code == 1) homeFragment.updateSystemStatus(code);
+                    else if (code >= 3 && code <= 5) homeFragment.updateLiquidStatus(code);
+                });
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Parse error: " + line + " → " + e.getMessage());
+        }
+    }
+
+    // ---------------------- DISCONNECT ---------------------- //
+
+    public void disconnectFromDevice() {
+        try {
+            if (socket != null) {
+                socket.close();
+                socket = null;
+                isReading = false;
+                showToast("Disconnected from device");
+            } else {
+                showToast("No active connection");
+            }
+        } catch (IOException e) {
+            showToast("Error disconnecting");
+        }
+    }
+
+    private void closeSocket() {
+        try {
+            if (socket != null) socket.close();
+        } catch (IOException ignored) {}
+        socket = null;
+        isReading = false;
+    }
+
+    // ---------------------- UI ---------------------- //
+
+    private void setupBottomNavigation() {
         binding.bottomNavigationView.setBackground(null);
         binding.bottomNavigationView.setOnItemSelectedListener(item -> {
             int id = item.getItemId();
             if (id == R.id.home) {
                 replaceFragment(homeFragment, "HOME_FRAGMENT");
-                homeFragment.updateInsectCount(latestCount);
-            } else if (id == R.id.about) {
-                replaceFragment(aboutFragment, "ABOUT_FRAGMENT");
+                fetchLatestCount();
+            } else if (id == R.id.bluetooth) {
+                replaceFragment(bluetoothFragment, "BLUETOOTH_FRAGMENT");
             } else if (id == R.id.history) {
                 replaceFragment(historyFragment, "HISTORY_FRAGMENT");
             } else if (id == R.id.settings) {
@@ -113,48 +219,26 @@ public class MainActivity extends AppCompatActivity {
             }
             return true;
         });
+    }
 
-        // Floating Refresh Button → Refresh current fragment only
+    private void setupFloatingButton() {
         FloatingActionButton fab = findViewById(R.id.fab_refresh);
         fab.setOnClickListener(v -> refreshCurrentFragment());
     }
 
-    /**
-     * Save the MAC address to Room DB if not already saved.
-     */
-    private void saveDeviceIfNew(String qrCode) {
-        new Thread(() -> {
-            Device existing = db.deviceDao().getRegisteredDevice();
-            if (existing == null || !existing.getQrCode().equals(qrCode)) {
-                Device device = new Device(qrCode); // Pass only the String
-                db.deviceDao().insert(device);
-                Log.d("DB_SAVE", "Device MAC saved: " + qrCode);
-            }
-        }).start();
-    }
-
-    /**
-     * Refreshes only the currently active fragment.
-     */
     private void refreshCurrentFragment() {
         Fragment current = getSupportFragmentManager().findFragmentById(R.id.frame_layout);
         if (current instanceof HomeFragment) {
             fetchLatestCount();
-            Toast.makeText(this, "Home refreshed", Toast.LENGTH_SHORT).show();
-        } else if (current instanceof AboutFragment) {
-            aboutFragment.onResume();
-            Toast.makeText(this, "About refreshed", Toast.LENGTH_SHORT).show();
+            showToast("Home refreshed");
         } else if (current instanceof HistoryFragment) {
             historyFragment.onResume();
-            Toast.makeText(this, "History refreshed", Toast.LENGTH_SHORT).show();
+            showToast("History refreshed");
         } else {
-            Toast.makeText(this, "Nothing to refresh here", Toast.LENGTH_SHORT).show();
+            showToast("Nothing to refresh");
         }
     }
 
-    /**
-     * Replace fragments smoothly.
-     */
     private void replaceFragment(Fragment fragment, String tag) {
         FragmentManager fm = getSupportFragmentManager();
         FragmentTransaction ft = fm.beginTransaction();
@@ -162,131 +246,60 @@ public class MainActivity extends AppCompatActivity {
         ft.commitAllowingStateLoss();
     }
 
-    /**
-     * Connect to HC-05 Bluetooth dynamically using MAC from QR or DB.
-     */
-    private void connectToBluetooth(String mac) {
-        mac = mac.replace("MAC:", "").trim();
-        if (mac.length() == 12 && !mac.contains(":")) {
-            mac = mac.replaceAll("(.{2})(?!$)", "$1:");
-        }
+    // ---------------------- PERMISSIONS ---------------------- //
 
-        BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
-        if (adapter == null) {
-            Toast.makeText(this, "Bluetooth not supported", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED ||
-                ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_SCAN) != PackageManager.PERMISSION_GRANTED) {
-
+    private void requestBluetoothPermissions() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             ActivityCompat.requestPermissions(this, new String[]{
                     Manifest.permission.BLUETOOTH_CONNECT,
-                    Manifest.permission.BLUETOOTH_SCAN
-            }, 1);
-            return;
-        }
-
-        BluetoothDevice device;
-        try {
-            device = adapter.getRemoteDevice(mac);
-        } catch (IllegalArgumentException e) {
-            Toast.makeText(this, "Invalid MAC: " + mac, Toast.LENGTH_LONG).show();
-            return;
-        }
-
-        String finalMac = mac;
-        new Thread(() -> {
-            try {
-                socket = device.createRfcommSocketToServiceRecord(HC05_UUID);
-                adapter.cancelDiscovery();
-                socket.connect();
-
-                runOnUiThread(() ->
-                        Toast.makeText(this, "✅ Connected to HC-05: " + finalMac, Toast.LENGTH_SHORT).show()
-                );
-
-                startReading(socket);
-
-            } catch (IOException e) {
-                e.printStackTrace();
-                runOnUiThread(() ->
-                        Toast.makeText(this, "Connection failed: " + e.getMessage(), Toast.LENGTH_LONG).show()
-                );
-            }
-        }).start();
-    }
-
-    /**
-     * Reads serial data from HC-05 and updates UI + DB.
-     */
-    private void startReading(BluetoothSocket socket) {
-        readingData = true;
-
-        try {
-            InputStream inputStream = socket.getInputStream();
-            BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream));
-
-            while (readingData) {
-                String line = reader.readLine();
-                if (line == null || line.isEmpty()) continue;
-                line = line.trim();
-
-                if (line.contains(",")) {
-                    // Example: "2,5" (detection code, count)
-                    String[] parts = line.split(",");
-                    int code = Integer.parseInt(parts[0].trim());
-                    int count = Integer.parseInt(parts[1].trim());
-
-                    if (code == 2) {
-                        latestCount = count;
-                        String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(new Date());
-                        Detection detection = new Detection(macAddress, timestamp, count);
-
-                        new Thread(() -> db.detectionDao().insert(detection)).start();
-                        runOnUiThread(() -> homeFragment.updateInsectCount(count));
-                    }
-
-                } else {
-                    // Single codes for status/liquid
-                    int code = Integer.parseInt(line);
-                    if (code == 0 || code == 1) {
-                        runOnUiThread(() -> homeFragment.updateSystemStatus(code));
-                    } else if (code == 3 || code == 4 || code == 5) {
-                        runOnUiThread(() -> homeFragment.updateLiquidStatus(code));
-                    }
-                }
-            }
-        } catch (Exception e) {
-            Log.e("BT_READ", "Error reading data: " + e.getMessage());
+                    Manifest.permission.BLUETOOTH_SCAN,
+                    Manifest.permission.ACCESS_FINE_LOCATION
+            }, REQUEST_BT_PERMISSIONS);
         }
     }
 
-    /**
-     * Fetch today's detection count.
-     */
-    private void fetchLatestCount() {
-        new Thread(() -> {
-            try {
-                int count = db.detectionDao().getTodayTotalCount(macAddress != null ? macAddress : "UNKNOWN");
-                latestCount = count;
-                runOnUiThread(() -> {
-                    if (homeFragment != null) homeFragment.updateInsectCount(latestCount);
-                });
-            } catch (Exception e) {
-                Log.e("DB_FETCH", "Error fetching count", e);
-            }
-        }).start();
+    private boolean hasPermission(String perm) {
+        return ActivityCompat.checkSelfPermission(this, perm) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode,
+                                           @NonNull String[] permissions,
+                                           @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == REQUEST_BT_PERMISSIONS) {
+            boolean granted = true;
+            for (int result : grantResults)
+                if (result != PackageManager.PERMISSION_GRANTED) granted = false;
+
+            if (granted && connectedMac != null) connectToDevice(connectedMac);
+            else showToast("Bluetooth permission denied.");
+        }
+    }
+
+    private void showToast(String msg) {
+        runOnUiThread(() -> Toast.makeText(this, msg, Toast.LENGTH_SHORT).show());
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        readingData = false;
-        try {
-            if (socket != null) socket.close();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+        isReading = false;
+        closeSocket();
+    }
+
+    // ---------------------- FETCH COUNT ---------------------- //
+
+    private void fetchLatestCount() {
+        if (connectedMac == null) return;
+        new Thread(() -> {
+            try {
+                int count = db.detectionDao().getTodayTotalCount(connectedMac);
+                latestCount = count;
+                runOnUiThread(() -> homeFragment.updateInsectCount(count));
+            } catch (Exception e) {
+                Log.e(TAG, "DB fetch error", e);
+            }
+        }).start();
     }
 }

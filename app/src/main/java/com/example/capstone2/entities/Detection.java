@@ -5,15 +5,16 @@ import androidx.room.PrimaryKey;
 
 @Entity(tableName = "detections")
 public class Detection {
+
     @PrimaryKey(autoGenerate = true)
     private int id;
 
-    private String deviceQr; // which device detected
-    private String timestamp; // when detection occurred
-    private int insectCount; // how many insects detected
+    private String deviceMac; // ✅ replaced deviceQr → deviceMac
+    private String timestamp;
+    private int insectCount;
 
-    public Detection(String deviceQr, String timestamp, int insectCount) {
-        this.deviceQr = deviceQr;
+    public Detection(String deviceMac, String timestamp, int insectCount) {
+        this.deviceMac = deviceMac;
         this.timestamp = timestamp;
         this.insectCount = insectCount;
     }
@@ -22,8 +23,8 @@ public class Detection {
     public int getId() { return id; }
     public void setId(int id) { this.id = id; }
 
-    public String getDeviceQr() { return deviceQr; }
-    public void setDeviceQr(String deviceQr) { this.deviceQr = deviceQr; }
+    public String getDeviceMac() { return deviceMac; }
+    public void setDeviceMac(String deviceMac) { this.deviceMac = deviceMac; }
 
     public String getTimestamp() { return timestamp; }
     public void setTimestamp(String timestamp) { this.timestamp = timestamp; }

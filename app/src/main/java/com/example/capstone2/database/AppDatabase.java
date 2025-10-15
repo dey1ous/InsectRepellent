@@ -11,7 +11,7 @@ import com.example.capstone2.daos.DetectionDao;
 import com.example.capstone2.entities.Device;
 import com.example.capstone2.entities.Detection;
 
-@Database(entities = {Device.class, Detection.class}, version = 1, exportSchema = false)
+@Database(entities = {Device.class, Detection.class}, version = 2, exportSchema = false)
 public abstract class AppDatabase extends RoomDatabase {
 
     // Singleton instance (only one database instance throughout the app)
