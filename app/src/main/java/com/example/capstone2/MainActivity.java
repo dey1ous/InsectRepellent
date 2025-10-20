@@ -32,6 +32,7 @@ import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -49,15 +50,14 @@ public class MainActivity extends AppCompatActivity {
     private String connectedMac;
     private int latestCount = 0;
 
+    // ⭐ FIX: Add a flag to prevent multiple simultaneous connection attempts.
+    private final AtomicBoolean isConnecting = new AtomicBoolean(false);
+
     private HomeFragment homeFragment;
     private BluetoothFragment bluetoothFragment;
     private HistoryFragment historyFragment;
     private SettingsFragment settingsFragment;
 
-    /**
-     * ⭐ Getter method for the HistoryFragment to access the connected device's MAC address.
-     * This was the final fix to resolve the compile error.
-     */
     public String getConnectedMac() {
         return connectedMac;
     }
@@ -86,6 +86,12 @@ public class MainActivity extends AppCompatActivity {
 
     @RequiresPermission(allOf = {Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT})
     public void connectToDevice(String macAddress) {
+        // ⭐ FIX: Check if a connection is already in progress.
+        if (isConnecting.get()) {
+            showToast("Connection already in progress...");
+            return;
+        }
+
         if (adapter == null) {
             showToast("Bluetooth not supported.");
             return;
@@ -95,11 +101,15 @@ public class MainActivity extends AppCompatActivity {
             return;
         }
         if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
+            connectedMac = macAddress; // Set mac before asking
             requestBluetoothPermissions();
             return;
         }
 
         connectedMac = macAddress;
+
+        // ⭐ FIX: Set the flag to true BEFORE starting the connection process.
+        isConnecting.set(true);
 
         AppDatabase.databaseWriteExecutor.execute(() -> {
             try {
@@ -107,6 +117,7 @@ public class MainActivity extends AppCompatActivity {
                 BluetoothDevice device = adapter.getRemoteDevice(macAddress);
                 connectWithRetries(device);
             } catch (IllegalArgumentException | InterruptedException e) {
+                isConnecting.set(false); // ⭐ FIX: Reset the flag on failure.
                 runOnUiThread(() -> showToast("Invalid MAC address or thread interrupted."));
             }
         });
@@ -122,9 +133,12 @@ public class MainActivity extends AppCompatActivity {
                 socket = device.createInsecureRfcommSocketToServiceRecord(HC05_UUID);
                 Log.d(TAG, "Connecting... Attempt " + attempt);
                 socket.connect();
+
                 runOnUiThread(() -> showToast("✅ Connected to " + (device.getName() != null ? device.getName() : "Unknown Device")));
+                isConnecting.set(false); // ⭐ FIX: Reset the flag on successful connection.
                 startReading(socket);
                 return;
+
             } catch (IOException e) {
                 Log.w(TAG, "Connection Attempt " + attempt + " failed: " + e.getMessage());
                 try {
@@ -138,6 +152,7 @@ public class MainActivity extends AppCompatActivity {
                     Thread.currentThread().interrupt();
                     Log.e(TAG, "Retry loop interrupted.");
                     runOnUiThread(() -> showToast("Connection attempt was cancelled."));
+                    isConnecting.set(false); // ⭐ FIX: Reset the flag if interrupted.
                     return;
                 }
             }
@@ -145,6 +160,7 @@ public class MainActivity extends AppCompatActivity {
 
         Log.e(TAG, "Connection failed after all retries.");
         runOnUiThread(() -> showToast("Connection failed. Please ensure the device is on and paired."));
+        isConnecting.set(false); // ⭐ FIX: Reset the flag after all retries fail.
         closeSocket();
     }
 
@@ -154,7 +170,6 @@ public class MainActivity extends AppCompatActivity {
             adapter.cancelDiscovery();
         }
     }
-
     private void startReading(BluetoothSocket connectedSocket) {
         isReading = true;
         AppDatabase.databaseWriteExecutor.execute(() -> {
