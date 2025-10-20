@@ -3,6 +3,7 @@ package com.example.capstone2;
 import android.Manifest;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Bundle;
@@ -38,9 +39,7 @@ public class BluetoothFragment extends Fragment {
 
     @Nullable
     @Override
-    public View onCreateView(@NonNull LayoutInflater inflater,
-                             @Nullable ViewGroup container,
-                             @Nullable Bundle savedInstanceState) {
+    public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
         View view = inflater.inflate(R.layout.fragment_bluetooth, container, false);
 
         listView = view.findViewById(R.id.listViewDevices);
@@ -50,12 +49,23 @@ public class BluetoothFragment extends Fragment {
         bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
         db = AppDatabase.getInstance(requireContext());
 
-        adapter = new ArrayAdapter<>(requireContext(), android.R.layout.simple_list_item_1);
-        listView.setAdapter(adapter);
+        // ⭐ RECOMMENDATION: Robustness - Check context before creating adapter
+        Context context = getContext();
+        if (context != null) {
+            adapter = new ArrayAdapter<>(context, android.R.layout.simple_list_item_1);
+            listView.setAdapter(adapter);
+        }
 
-        requestBluetoothPermissions();
+        btnScan.setOnClickListener(v -> {
+            // ⭐ RECOMMENDATION: Streamlined Logic - Check permissions before loading
+            if (hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
+                loadPairedDevices();
+            } else {
+                showToast("Bluetooth permissions are required to scan.");
+                requestBluetoothPermissions(); // Ask again if needed
+            }
+        });
 
-        btnScan.setOnClickListener(v -> loadPairedDevices());
         btnDisconnect.setOnClickListener(v -> disconnectDevice());
 
         listView.setOnItemClickListener((parent, view1, position, id) -> {
@@ -64,36 +74,41 @@ public class BluetoothFragment extends Fragment {
                 return;
             }
 
-            if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
-                requestBluetoothPermissions();
-                showToast("Bluetooth permission required");
-                return;
-            }
-
             BluetoothDevice device = devicesList.get(position);
-            if (device == null) {
-                showToast("Invalid device");
-                return;
-            }
-
             String name = (device.getName() != null) ? device.getName() : "Unknown Device";
             String mac = device.getAddress();
             showToast("Connecting to " + name);
 
-            // Save device to database if not exists
-            new Thread(() -> {
+            // ⭐ RECOMMENDATION: Performance - Use the shared executor for database operations
+            AppDatabase.databaseWriteExecutor.execute(() -> {
                 Device existing = db.deviceDao().findByMac(mac);
                 if (existing == null) {
                     db.deviceDao().insert(new Device(name, mac));
                 }
-            }).start();
+            });
 
-            // Connect via MainActivity
-            ((MainActivity) requireActivity()).connectToDevice(mac);
+            // Connect via MainActivity (ensure it has permission first)
+            if (getActivity() instanceof MainActivity && hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
+                ((MainActivity) getActivity()).connectToDevice(mac);
+            } else {
+                showToast("Cannot connect without Bluetooth permissions.");
+            }
         });
 
-        loadPairedDevices();
         return view;
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        // ⭐ RECOMMENDATION: Lifecycle awareness - Load devices when fragment is visible
+        // This ensures the list is populated if permissions were already granted.
+        if (hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
+            loadPairedDevices();
+        } else {
+            // If permissions aren't granted when the screen is shown, ask for them.
+            requestBluetoothPermissions();
+        }
     }
 
     private void requestBluetoothPermissions() {
@@ -105,24 +120,28 @@ public class BluetoothFragment extends Fragment {
     }
 
     private boolean hasPermission(String perm) {
-        return ActivityCompat.checkSelfPermission(requireContext(), perm)
-                == PackageManager.PERMISSION_GRANTED;
+        if (getContext() == null) {
+            return false;
+        }
+        return ActivityCompat.checkSelfPermission(getContext(), perm) == PackageManager.PERMISSION_GRANTED;
     }
 
     private void loadPairedDevices() {
         if (bluetoothAdapter == null) {
-            showToast("Bluetooth not supported");
+            showToast("Bluetooth is not supported on this device.");
             return;
         }
-
-        if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
-            requestBluetoothPermissions();
-            return;
-        }
-
         if (!bluetoothAdapter.isEnabled()) {
+            // Prompt user to enable Bluetooth
             Intent enableBtIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
             startActivity(enableBtIntent);
+            showToast("Please enable Bluetooth and try again.");
+            return;
+        }
+
+        // This check is required by the system
+        if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
+            showToast("Cannot load devices without permission.");
             return;
         }
 
@@ -132,34 +151,47 @@ public class BluetoothFragment extends Fragment {
 
         if (pairedDevices != null && !pairedDevices.isEmpty()) {
             for (BluetoothDevice device : pairedDevices) {
-                String name = (device.getName() != null) ? device.getName() : "Unnamed";
+                String name = (device.getName() != null) ? device.getName() : "Unnamed Device";
                 adapter.add("🟢 " + name + "\n" + device.getAddress());
                 devicesList.add(device);
             }
         } else {
-            adapter.add("No paired devices found");
+            // Consider moving this to strings.xml for best practice
+            adapter.add("No paired devices found. Please pair a device in your phone's Bluetooth settings first.");
         }
     }
 
     private void disconnectDevice() {
-        ((MainActivity) requireActivity()).disconnectFromDevice();
-        showToast("Disconnected");
+        if (getActivity() instanceof MainActivity) {
+            ((MainActivity) getActivity()).disconnectFromDevice();
+        }
     }
 
     private void showToast(String msg) {
-        Toast.makeText(requireContext(), msg, Toast.LENGTH_SHORT).show();
+        // ⭐ RECOMMENDATION: Robustness - Check context before showing a Toast
+        if (getContext() != null) {
+            Toast.makeText(getContext(), msg, Toast.LENGTH_SHORT).show();
+        }
     }
 
     @Override
-    public void onRequestPermissionsResult(int requestCode,
-                                           @NonNull String[] permissions,
-                                           @NonNull int[] grantResults) {
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == REQUEST_BT_PERMISSIONS) {
-            boolean granted = true;
-            for (int result : grantResults)
-                if (result != PackageManager.PERMISSION_GRANTED) granted = false;
-            if (!granted) showToast("Bluetooth permission denied.");
+            boolean allGranted = true;
+            for (int result : grantResults) {
+                if (result != PackageManager.PERMISSION_GRANTED) {
+                    allGranted = false;
+                    break;
+                }
+            }
+
+            // ⭐ RECOMMENDATION: Streamlined Logic - Load devices only after permissions are granted.
+            if (allGranted) {
+                loadPairedDevices();
+            } else {
+                showToast("Bluetooth permission denied. Cannot show devices.");
+            }
         }
     }
 }

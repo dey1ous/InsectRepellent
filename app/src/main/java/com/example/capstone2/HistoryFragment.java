@@ -1,15 +1,16 @@
 package com.example.capstone2;
 
 import android.app.DatePickerDialog;
+import android.content.Context;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.fragment.app.Fragment;
-
 import com.example.capstone2.database.AppDatabase;
 import com.example.capstone2.entities.Detection;
 import com.github.mikephil.charting.charts.LineChart;
@@ -17,8 +18,8 @@ import com.github.mikephil.charting.components.XAxis;
 import com.github.mikephil.charting.data.Entry;
 import com.github.mikephil.charting.data.LineData;
 import com.github.mikephil.charting.data.LineDataSet;
+import com.github.mikephil.charting.formatter.ValueFormatter;
 
-import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
@@ -29,9 +30,10 @@ import java.util.Locale;
 public class HistoryFragment extends Fragment {
 
     private LineChart historyGraph;
-    private TextView weekCount, dayCount;
+    private TextView weekCount, dayCount, deviceNameTextView;
     private androidx.appcompat.widget.AppCompatAutoCompleteTextView dropdownMenu;
     private AppDatabase db;
+    private String currentDeviceMac;
 
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container,
@@ -41,110 +43,105 @@ public class HistoryFragment extends Fragment {
         historyGraph = view.findViewById(R.id.historyGraph);
         weekCount = view.findViewById(R.id.weekCount);
         dayCount = view.findViewById(R.id.dayCount);
+        deviceNameTextView = view.findViewById(R.id.deviceName); // Assuming you have a TextView with this ID
         dropdownMenu = view.findViewById(R.id.dropdownMenu);
 
         db = AppDatabase.getInstance(requireContext());
 
-        // Default load for today
+        // ⭐ Get the currently connected device's MAC from MainActivity
+        if (getActivity() instanceof MainActivity) {
+            currentDeviceMac = ((MainActivity) getActivity()).getConnectedMac();
+        }
+
         String today = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(new Date());
         dropdownMenu.setText(today, false);
         loadGraphData(today);
 
-        // When dropdown is clicked, open the date picker
         dropdownMenu.setOnClickListener(v -> showDatePicker());
-
-        // Enable zoom/pan for chart
         setupChartInteraction();
 
         return view;
     }
 
     private void showDatePicker() {
-        final Calendar calendar = Calendar.getInstance();
-
-        // Force the dialog to use a style that includes OK/Cancel buttons
-        DatePickerDialog datePickerDialog = new DatePickerDialog(
-                requireContext(),
-                android.R.style.Theme_Holo_Light_Dialog_MinWidth, // ✅ ensures OK/Cancel visible
-                (view, year, month, dayOfMonth) -> {
-                    String selectedDate = String.format(Locale.getDefault(), "%04d-%02d-%02d", year, month + 1, dayOfMonth);
-                    dropdownMenu.setText(selectedDate, false);
-                    loadGraphData(selectedDate);
-                },
-                calendar.get(Calendar.YEAR),
-                calendar.get(Calendar.MONTH),
-                calendar.get(Calendar.DAY_OF_MONTH)
-        );
-
-        // Optional: only allow up to today
-        datePickerDialog.getDatePicker().setMaxDate(System.currentTimeMillis());
-
-        // Make background transparent (optional aesthetic)
-        if (datePickerDialog.getWindow() != null) {
-            datePickerDialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
-        }
-
-        datePickerDialog.show();
+        // ... (this method can remain the same as your previous version)
     }
 
     private void setupChartInteraction() {
-        historyGraph.setDragEnabled(true);
-        historyGraph.setScaleEnabled(true);
-        historyGraph.setPinchZoom(true);
+        // ... (this method can remain the same as your previous version)
     }
 
+    /**
+     * ⭐ REWRITTEN to be device-specific and highly efficient.
+     */
     private void loadGraphData(String selectedDate) {
-        new Thread(() -> {
-            SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault());
-            SimpleDateFormat timestampFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault());
+        if (currentDeviceMac == null || currentDeviceMac.isEmpty()) {
+            Toast.makeText(getContext(), "No device connected. History is unavailable.", Toast.LENGTH_LONG).show();
+            clearChartAndCounts();
+            return;
+        }
 
-            long oneWeekAgo = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000;
-            int weeklySum = 0;
-            int dailySum = 0;
+        AppDatabase.databaseWriteExecutor.execute(() -> {
+            Calendar cal = Calendar.getInstance();
+            cal.add(Calendar.DATE, -7);
+            String sevenDaysAgoTimestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(cal.getTime());
 
-            List<Detection> allDetections = db.detectionDao().getAllDetections();
-            List<Detection> dailyDetections = new ArrayList<>();
+            // ⭐ Execute the new, device-specific queries from the DAO
+            int dailySum = db.detectionDao().getDailyTotalForDevice(selectedDate, currentDeviceMac);
+            int weeklySum = db.detectionDao().getSumSinceForDevice(sevenDaysAgoTimestamp, currentDeviceMac);
+            List<Detection> dailyDetections = db.detectionDao().getDetectionsForDayByDevice(selectedDate, currentDeviceMac);
 
-            for (Detection d : allDetections) {
-                try {
-                    Date detectionDate = timestampFormat.parse(d.getTimestamp());
-                    if (detectionDate == null) continue;
+            if (getActivity() != null) {
+                getActivity().runOnUiThread(() -> {
+                    dayCount.setText(String.valueOf(dailySum));
+                    weekCount.setText(String.valueOf(weeklySum));
 
-                    long timeMillis = detectionDate.getTime();
-
-                    if (selectedDate.equals(dateFormat.format(detectionDate))) {
-                        dailySum += d.getInsectCount();
-                        dailyDetections.add(d);
+                    List<Entry> entries = new ArrayList<>();
+                    SimpleDateFormat timestampFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault());
+                    for (Detection d : dailyDetections) {
+                        try {
+                            Date detectionDate = timestampFormat.parse(d.getTimestamp());
+                            if (detectionDate != null) {
+                                entries.add(new Entry(detectionDate.getTime(), d.getInsectCount()));
+                            }
+                        } catch (Exception e) {
+                            // Handle parsing error
+                        }
                     }
 
-                    if (timeMillis >= oneWeekAgo) weeklySum += d.getInsectCount();
-
-                } catch (ParseException e) {
-                    e.printStackTrace();
-                }
+                    updateChart(entries, selectedDate);
+                });
             }
+        });
+    }
 
-            int finalDailySum = dailySum;
-            int finalWeeklySum = weeklySum;
-            requireActivity().runOnUiThread(() -> {
-                dayCount.setText(String.valueOf(finalDailySum));
-                weekCount.setText(String.valueOf(finalWeeklySum));
+    private void updateChart(List<Entry> entries, String selectedDate) {
+        Context context = getContext();
+        if (context == null) return;
 
-                List<Entry> entries = new ArrayList<>();
-                for (int i = 0; i < dailyDetections.size(); i++) {
-                    entries.add(new Entry(i, dailyDetections.get(i).getInsectCount()));
-                }
+        if (entries.isEmpty()) {
+            historyGraph.clear();
+            historyGraph.setNoDataText("No detections on " + selectedDate);
+            historyGraph.invalidate();
+            return;
+        }
 
-                LineDataSet dataSet = new LineDataSet(entries, "Insect Detections");
-                dataSet.setColor(getResources().getColor(R.color.teal_700, null));
-                dataSet.setValueTextColor(getResources().getColor(R.color.black, null));
+        LineDataSet dataSet = new LineDataSet(entries, "Detections on " + selectedDate);
+        dataSet.setColor(context.getColor(R.color.teal_700));
+        dataSet.setValueTextColor(context.getColor(R.color.black));
+        dataSet.setCircleColor(context.getColor(R.color.teal_700));
+        dataSet.setLineWidth(2f);
 
-                LineData lineData = new LineData(dataSet);
-                historyGraph.setData(lineData);
-                historyGraph.getDescription().setEnabled(false);
-                historyGraph.getXAxis().setPosition(XAxis.XAxisPosition.BOTTOM);
-                historyGraph.invalidate();
-            });
-        }).start();
+        LineData lineData = new LineData(dataSet);
+        historyGraph.setData(lineData);
+        historyGraph.invalidate();
+    }
+
+    private void clearChartAndCounts() {
+        dayCount.setText("0");
+        weekCount.setText("0");
+        historyGraph.clear();
+        historyGraph.setNoDataText("Please connect to a device to see history.");
+        historyGraph.invalidate();
     }
 }

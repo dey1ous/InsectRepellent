@@ -12,6 +12,7 @@ import android.widget.Toast;
 
 import androidx.activity.EdgeToEdge;
 import androidx.annotation.NonNull;
+import androidx.annotation.RequiresPermission;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.fragment.app.Fragment;
@@ -27,7 +28,6 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.lang.reflect.Method;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
@@ -37,14 +37,15 @@ public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "HC05_DEBUG";
     private static final UUID HC05_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
-    private static final int REQUEST_BT_PERMISSIONS = 101;
+    public static final int REQUEST_BT_PERMISSIONS = 101;
+    private static final int MAX_RETRIES = 5;
 
     private ActivityMainBinding binding;
     private AppDatabase db;
     private BluetoothAdapter adapter;
     private BluetoothSocket socket;
 
-    private boolean isReading = false;
+    private volatile boolean isReading = false;
     private String connectedMac;
     private int latestCount = 0;
 
@@ -52,6 +53,14 @@ public class MainActivity extends AppCompatActivity {
     private BluetoothFragment bluetoothFragment;
     private HistoryFragment historyFragment;
     private SettingsFragment settingsFragment;
+
+    /**
+     * ⭐ Getter method for the HistoryFragment to access the connected device's MAC address.
+     * This was the final fix to resolve the compile error.
+     */
+    public String getConnectedMac() {
+        return connectedMac;
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -75,17 +84,16 @@ public class MainActivity extends AppCompatActivity {
 
     // ---------------------- BLUETOOTH ---------------------- //
 
+    @RequiresPermission(allOf = {Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT})
     public void connectToDevice(String macAddress) {
         if (adapter == null) {
             showToast("Bluetooth not supported.");
             return;
         }
-
         if (!adapter.isEnabled()) {
             showToast("Please enable Bluetooth first.");
             return;
         }
-
         if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
             requestBluetoothPermissions();
             return;
@@ -93,61 +101,78 @@ public class MainActivity extends AppCompatActivity {
 
         connectedMac = macAddress;
 
-        new Thread(() -> {
+        AppDatabase.databaseWriteExecutor.execute(() -> {
             try {
+                Thread.sleep(50);
                 BluetoothDevice device = adapter.getRemoteDevice(macAddress);
-                connectWithFallback(device);
-            } catch (IllegalArgumentException e) {
-                runOnUiThread(() -> showToast("Invalid MAC address."));
+                connectWithRetries(device);
+            } catch (IllegalArgumentException | InterruptedException e) {
+                runOnUiThread(() -> showToast("Invalid MAC address or thread interrupted."));
             }
-        }).start();
+        });
     }
 
-    private void connectWithFallback(BluetoothDevice device) {
-        try {
-            closeSocket();
-            if (adapter.isDiscovering()) adapter.cancelDiscovery();
+    @RequiresPermission(allOf = {Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN})
+    private void connectWithRetries(BluetoothDevice device) {
+        closeSocket();
+        cancelDiscovery();
 
-            // Primary socket attempt
-            socket = device.createRfcommSocketToServiceRecord(HC05_UUID);
-            socket.connect();
-            runOnUiThread(() -> showToast("✅ Connected to " + device.getName()));
-            startReading(socket);
-
-        } catch (IOException e) {
-            Log.w(TAG, "Primary failed, trying fallback: " + e.getMessage());
+        for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
             try {
-                Method m = device.getClass().getMethod("createRfcommSocket", int.class);
-                BluetoothSocket fallback = (BluetoothSocket) m.invoke(device, 1);
-                fallback.connect();
-                socket = fallback;
-                runOnUiThread(() -> showToast("✅ Connected (fallback)"));
+                socket = device.createInsecureRfcommSocketToServiceRecord(HC05_UUID);
+                Log.d(TAG, "Connecting... Attempt " + attempt);
+                socket.connect();
+                runOnUiThread(() -> showToast("✅ Connected to " + (device.getName() != null ? device.getName() : "Unknown Device")));
                 startReading(socket);
-            } catch (Exception ex) {
-                Log.e(TAG, "Fallback failed: " + ex.getMessage());
-                runOnUiThread(() -> showToast("Connection failed. Try again."));
-                closeSocket();
+                return;
+            } catch (IOException e) {
+                Log.w(TAG, "Connection Attempt " + attempt + " failed: " + e.getMessage());
+                try {
+                    if (socket != null) socket.close();
+                } catch (IOException closeIgnored) {
+                    // Ignored
+                }
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException interruptedException) {
+                    Thread.currentThread().interrupt();
+                    Log.e(TAG, "Retry loop interrupted.");
+                    runOnUiThread(() -> showToast("Connection attempt was cancelled."));
+                    return;
+                }
             }
+        }
+
+        Log.e(TAG, "Connection failed after all retries.");
+        runOnUiThread(() -> showToast("Connection failed. Please ensure the device is on and paired."));
+        closeSocket();
+    }
+
+    @RequiresPermission(Manifest.permission.BLUETOOTH_SCAN)
+    private void cancelDiscovery() {
+        if (adapter != null && adapter.isDiscovering()) {
+            adapter.cancelDiscovery();
         }
     }
 
-    private void startReading(BluetoothSocket socket) {
+    private void startReading(BluetoothSocket connectedSocket) {
         isReading = true;
-        new Thread(() -> {
-            try (InputStream in = socket.getInputStream();
+        AppDatabase.databaseWriteExecutor.execute(() -> {
+            try (InputStream in = connectedSocket.getInputStream();
                  BufferedReader reader = new BufferedReader(new InputStreamReader(in))) {
-
                 String line;
                 while (isReading && (line = reader.readLine()) != null) {
                     handleIncomingData(line.trim());
                 }
-
             } catch (IOException e) {
-                Log.e(TAG, "Disconnected: " + e.getMessage());
-                runOnUiThread(() -> showToast("Device disconnected."));
-                isReading = false;
+                if(isReading) {
+                    Log.e(TAG, "Disconnected: " + e.getMessage());
+                    runOnUiThread(() -> showToast("Device disconnected."));
+                }
+            } finally {
+                closeSocket();
             }
-        }).start();
+        });
     }
 
     private void handleIncomingData(String line) {
@@ -161,15 +186,21 @@ public class MainActivity extends AppCompatActivity {
                     latestCount = count;
                     String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(new Date());
                     Detection detection = new Detection(connectedMac, timestamp, count);
-                    new Thread(() -> db.detectionDao().insert(detection)).start();
-                    runOnUiThread(() -> homeFragment.updateInsectCount(count));
+
+                    AppDatabase.databaseWriteExecutor.execute(() -> db.detectionDao().insert(detection));
+
+                    if(homeFragment != null && homeFragment.isAdded()) {
+                        runOnUiThread(() -> homeFragment.updateInsectCount(count));
+                    }
                 }
             } else {
                 int code = Integer.parseInt(line);
-                runOnUiThread(() -> {
-                    if (code == 0 || code == 1) homeFragment.updateSystemStatus(code);
-                    else if (code >= 3 && code <= 5) homeFragment.updateLiquidStatus(code);
-                });
+                if(homeFragment != null && homeFragment.isAdded()) {
+                    runOnUiThread(() -> {
+                        if (code == 0 || code == 1) homeFragment.updateSystemStatus(code);
+                        else if (code >= 3 && code <= 5) homeFragment.updateLiquidStatus(code);
+                    });
+                }
             }
         } catch (Exception e) {
             Log.e(TAG, "Parse error: " + line + " → " + e.getMessage());
@@ -179,29 +210,25 @@ public class MainActivity extends AppCompatActivity {
     // ---------------------- DISCONNECT ---------------------- //
 
     public void disconnectFromDevice() {
-        try {
-            if (socket != null) {
-                socket.close();
-                socket = null;
-                isReading = false;
-                showToast("Disconnected from device");
-            } else {
-                showToast("No active connection");
-            }
-        } catch (IOException e) {
-            showToast("Error disconnecting");
-        }
+        isReading = false;
+        closeSocket();
+        showToast("Disconnected from device");
     }
 
     private void closeSocket() {
         try {
-            if (socket != null) socket.close();
-        } catch (IOException ignored) {}
-        socket = null;
-        isReading = false;
+            if (socket != null) {
+                socket.close();
+            }
+        } catch (IOException e) {
+            Log.e(TAG, "Could not close the client socket", e);
+        } finally {
+            socket = null;
+            isReading = false;
+        }
     }
 
-    // ---------------------- UI ---------------------- //
+    // ---------------------- UI & NAVIGATION ---------------------- //
 
     private void setupBottomNavigation() {
         binding.bottomNavigationView.setBackground(null);
@@ -209,7 +236,6 @@ public class MainActivity extends AppCompatActivity {
             int id = item.getItemId();
             if (id == R.id.home) {
                 replaceFragment(homeFragment, "HOME_FRAGMENT");
-                fetchLatestCount();
             } else if (id == R.id.bluetooth) {
                 replaceFragment(bluetoothFragment, "BLUETOOTH_FRAGMENT");
             } else if (id == R.id.history) {
@@ -232,7 +258,7 @@ public class MainActivity extends AppCompatActivity {
             fetchLatestCount();
             showToast("Home refreshed");
         } else if (current instanceof HistoryFragment) {
-            historyFragment.onResume();
+            // Let onResume handle the refresh for History
             showToast("History refreshed");
         } else {
             showToast("Nothing to refresh");
@@ -255,6 +281,12 @@ public class MainActivity extends AppCompatActivity {
                     Manifest.permission.BLUETOOTH_SCAN,
                     Manifest.permission.ACCESS_FINE_LOCATION
             }, REQUEST_BT_PERMISSIONS);
+        } else {
+            ActivityCompat.requestPermissions(this, new String[]{
+                    Manifest.permission.BLUETOOTH,
+                    Manifest.permission.BLUETOOTH_ADMIN,
+                    Manifest.permission.ACCESS_FINE_LOCATION
+            }, REQUEST_BT_PERMISSIONS);
         }
     }
 
@@ -268,12 +300,20 @@ public class MainActivity extends AppCompatActivity {
                                            @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == REQUEST_BT_PERMISSIONS) {
-            boolean granted = true;
-            for (int result : grantResults)
-                if (result != PackageManager.PERMISSION_GRANTED) granted = false;
-
-            if (granted && connectedMac != null) connectToDevice(connectedMac);
-            else showToast("Bluetooth permission denied.");
+            boolean allGranted = true;
+            for (int result : grantResults) {
+                if (result != PackageManager.PERMISSION_GRANTED) {
+                    allGranted = false;
+                    break;
+                }
+            }
+            if (allGranted) {
+                if (connectedMac != null) {
+                    connectToDevice(connectedMac);
+                }
+            } else {
+                showToast("Bluetooth permissions are required to connect.");
+            }
         }
     }
 
@@ -284,22 +324,24 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        isReading = false;
-        closeSocket();
+        disconnectFromDevice();
     }
 
-    // ---------------------- FETCH COUNT ---------------------- //
+    // ---------------------- DATA FETCHING ---------------------- //
 
-    private void fetchLatestCount() {
+    public void fetchLatestCount() {
         if (connectedMac == null) return;
-        new Thread(() -> {
+        AppDatabase.databaseWriteExecutor.execute(() -> {
             try {
-                int count = db.detectionDao().getTodayTotalCount(connectedMac);
-                latestCount = count;
-                runOnUiThread(() -> homeFragment.updateInsectCount(count));
+                // Ensure DAO returns a primitive or handles null
+                Integer count = db.detectionDao().getTodayTotalCount(connectedMac);
+                latestCount = (count != null) ? count : 0;
+                if(homeFragment != null && homeFragment.isAdded()){
+                    runOnUiThread(() -> homeFragment.updateInsectCount(latestCount));
+                }
             } catch (Exception e) {
                 Log.e(TAG, "DB fetch error", e);
             }
-        }).start();
+        });
     }
 }

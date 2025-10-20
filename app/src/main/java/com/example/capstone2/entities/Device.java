@@ -1,7 +1,6 @@
 package com.example.capstone2.entities;
 
 import androidx.room.Entity;
-import androidx.room.Ignore;
 import androidx.room.PrimaryKey;
 
 @Entity(tableName = "devices")
@@ -11,22 +10,18 @@ public class Device {
     private int id;
 
     private String deviceName;
-    private String macAddress; // ✅ use MAC address instead of QR
+    private String macAddress;
 
-    // Constructor used by Room
-    public Device(String macAddress) {
-        this.deviceName = "HC-05"; // default name for your module
-        this.macAddress = macAddress;
-    }
-
-    // Optional constructor (ignored by Room)
-    @Ignore
+    /**
+     * ⭐ A single, clean constructor for both Room and your code to use.
+     * When you create a new device in your BluetoothFragment, you already provide both the name and the MAC address, so this works perfectly.
+     */
     public Device(String deviceName, String macAddress) {
         this.deviceName = deviceName;
         this.macAddress = macAddress;
     }
 
-    // Getters and setters
+    // Getters and setters (unchanged)
     public int getId() { return id; }
     public void setId(int id) { this.id = id; }
 

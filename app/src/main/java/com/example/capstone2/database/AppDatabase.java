@@ -1,27 +1,31 @@
 package com.example.capstone2.database;
 
 import android.content.Context;
-
 import androidx.room.Database;
 import androidx.room.Room;
 import androidx.room.RoomDatabase;
-
 import com.example.capstone2.daos.DeviceDao;
 import com.example.capstone2.daos.DetectionDao;
 import com.example.capstone2.entities.Device;
 import com.example.capstone2.entities.Detection;
 
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
 @Database(entities = {Device.class, Detection.class}, version = 2, exportSchema = false)
 public abstract class AppDatabase extends RoomDatabase {
 
-    // Singleton instance (only one database instance throughout the app)
     private static volatile AppDatabase INSTANCE;
 
-    // Abstract DAOs
+    // ⭐ RECOMMENDATION: Create a fixed-size thread pool for all database operations.
+    // This is more performant than creating a new thread for every query.
+    private static final int NUMBER_OF_THREADS = 4;
+    public static final ExecutorService databaseWriteExecutor =
+            Executors.newFixedThreadPool(NUMBER_OF_THREADS);
+
     public abstract DeviceDao deviceDao();
     public abstract DetectionDao detectionDao();
 
-    // Get database instance
     public static AppDatabase getInstance(Context context) {
         if (INSTANCE == null) {
             synchronized (AppDatabase.class) {
@@ -31,10 +35,7 @@ public abstract class AppDatabase extends RoomDatabase {
                                     AppDatabase.class,
                                     "capstone_db"
                             )
-                            // Use this only for development (it deletes data on schema change)
                             .fallbackToDestructiveMigration()
-                            // Optional: allow database access on main thread (for quick tests only)
-                            // .allowMainThreadQueries()
                             .build();
                 }
             }
