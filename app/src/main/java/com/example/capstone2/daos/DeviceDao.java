@@ -20,9 +20,9 @@ public interface DeviceDao {
     @Query("SELECT * FROM devices LIMIT 1")
     Device getRegisteredDevice();
 
-    // Find a device by its MAC address
-    @Query("SELECT * FROM devices WHERE macAddress = :mac LIMIT 1")
-    Device findByMac(String mac);
+    // ⭐ UPDATED: Find a device by its IP address
+    @Query("SELECT * FROM devices WHERE ipAddress = :ip LIMIT 1")
+    Device findByIp(String ip); // ⭐ CHANGED METHOD NAME AND PARAMETER
 
     // Delete all devices
     @Query("DELETE FROM devices")

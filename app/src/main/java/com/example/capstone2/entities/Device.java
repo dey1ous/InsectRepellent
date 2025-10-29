@@ -10,24 +10,23 @@ public class Device {
     private int id;
 
     private String deviceName;
-    private String macAddress;
+    private String ipAddress; // ⭐ CHANGED: Now stores the ESP32's IP address
 
     /**
-     * ⭐ A single, clean constructor for both Room and your code to use.
-     * When you create a new device in your BluetoothFragment, you already provide both the name and the MAC address, so this works perfectly.
+     * Constructor for a new device, identified by its IP.
      */
-    public Device(String deviceName, String macAddress) {
+    public Device(String deviceName, String ipAddress) {
         this.deviceName = deviceName;
-        this.macAddress = macAddress;
+        this.ipAddress = ipAddress;
     }
 
-    // Getters and setters (unchanged)
+    // Getters and setters
     public int getId() { return id; }
     public void setId(int id) { this.id = id; }
 
     public String getDeviceName() { return deviceName; }
     public void setDeviceName(String deviceName) { this.deviceName = deviceName; }
 
-    public String getMacAddress() { return macAddress; }
-    public void setMacAddress(String macAddress) { this.macAddress = macAddress; }
+    public String getIpAddress() { return ipAddress; }
+    public void setIpAddress(String ipAddress) { this.ipAddress = ipAddress; }
 }

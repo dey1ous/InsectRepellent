@@ -9,12 +9,12 @@ public class Detection {
     @PrimaryKey(autoGenerate = true)
     private int id;
 
-    private String deviceMac; // ✅ replaced deviceQr → deviceMac
+    private String deviceIp; // ⭐ CHANGED: Foreign key is now the device's IP
     private String timestamp;
     private int insectCount;
 
-    public Detection(String deviceMac, String timestamp, int insectCount) {
-        this.deviceMac = deviceMac;
+    public Detection(String deviceIp, String timestamp, int insectCount) { // ⭐ CONSTRUCTOR UPDATED
+        this.deviceIp = deviceIp;
         this.timestamp = timestamp;
         this.insectCount = insectCount;
     }
@@ -23,8 +23,8 @@ public class Detection {
     public int getId() { return id; }
     public void setId(int id) { this.id = id; }
 
-    public String getDeviceMac() { return deviceMac; }
-    public void setDeviceMac(String deviceMac) { this.deviceMac = deviceMac; }
+    public String getDeviceIp() { return deviceIp; } // ⭐ CHANGED
+    public void setDeviceIp(String deviceIp) { this.deviceIp = deviceIp; }
 
     public String getTimestamp() { return timestamp; }
     public void setTimestamp(String timestamp) { this.timestamp = timestamp; }

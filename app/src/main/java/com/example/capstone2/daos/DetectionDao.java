@@ -9,38 +9,38 @@ import java.util.List;
 @Dao
 public interface DetectionDao {
 
-    // --- Existing Methods (Kept for other parts of the app) ---
     @Insert
     void insert(Detection detection);
 
     @Query("SELECT * FROM detections ORDER BY timestamp DESC")
     List<Detection> getAllDetections();
 
-    @Query("SELECT * FROM detections WHERE deviceMac = :mac ORDER BY timestamp DESC")
-    List<Detection> getDetectionsByDevice(String mac);
+    // ⭐ UPDATED: Get detections by device IP
+    @Query("SELECT * FROM detections WHERE deviceIp = :ip ORDER BY timestamp DESC")
+    List<Detection> getDetectionsByDevice(String ip);
 
+    // ⭐ UPDATED: Get today's total count by device IP
     @Query("SELECT SUM(insectCount) FROM detections " +
-            "WHERE deviceMac = :mac AND date(timestamp) = date('now', 'localtime')")
-    Integer getTodayTotalCount(String mac);
+            "WHERE deviceIp = :ip AND date(timestamp) = date('now', 'localtime')")
+    Integer getTodayTotalCount(String ip);
 
-    // --- ⭐ New, Efficient Queries for HistoryFragment ---
-
-    /**
-     * Efficiently gets the total insect count for a specific day AND device.
-     */
-    @Query("SELECT SUM(insectCount) FROM detections WHERE deviceMac = :mac AND timestamp LIKE :date || '%'")
-    int getDailyTotalForDevice(String date, String mac);
+    // --- New, Efficient Queries for HistoryFragment ---
 
     /**
-     * Efficiently gets all detections for a specific day AND device.
+     * Efficiently gets the total insect count for a specific day AND device IP.
      */
-    @Query("SELECT * FROM detections WHERE deviceMac = :mac AND timestamp LIKE :date || '%' ORDER BY timestamp ASC")
-    List<Detection> getDetectionsForDayByDevice(String date, String mac);
+    @Query("SELECT SUM(insectCount) FROM detections WHERE deviceIp = :ip AND timestamp LIKE :date || '%'")
+    int getDailyTotalForDevice(String date, String ip);
 
     /**
-     * Efficiently gets the total insect count since a given timestamp for a specific device.
-     * Used to calculate the "last 7 days" total.
+     * Efficiently gets all detections for a specific day AND device IP.
      */
-    @Query("SELECT SUM(insectCount) FROM detections WHERE deviceMac = :mac AND timestamp >= :sinceTimestamp")
-    int getSumSinceForDevice(String sinceTimestamp, String mac);
+    @Query("SELECT * FROM detections WHERE deviceIp = :ip AND timestamp LIKE :date || '%' ORDER BY timestamp ASC")
+    List<Detection> getDetectionsForDayByDevice(String date, String ip);
+
+    /**
+     * Efficiently gets the total insect count since a given timestamp for a specific device IP.
+     */
+    @Query("SELECT SUM(insectCount) FROM detections WHERE deviceIp = :ip AND timestamp >= :sinceTimestamp")
+    int getSumSinceForDevice(String sinceTimestamp, String ip);
 }

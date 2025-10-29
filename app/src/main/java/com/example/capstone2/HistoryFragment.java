@@ -20,12 +20,12 @@ import com.github.mikephil.charting.data.LineData;
 import com.github.mikephil.charting.data.LineDataSet;
 import com.github.mikephil.charting.formatter.ValueFormatter;
 
-import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
+import java.text.SimpleDateFormat;
 
 public class HistoryFragment extends Fragment {
 
@@ -33,7 +33,8 @@ public class HistoryFragment extends Fragment {
     private TextView weekCount, dayCount, deviceNameTextView;
     private androidx.appcompat.widget.AppCompatAutoCompleteTextView dropdownMenu;
     private AppDatabase db;
-    private String currentDeviceMac;
+    // ⭐ RENAMED: Use IP to match the new database key (Device.ipAddress)
+    private String currentDeviceIP;
 
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, ViewGroup container,
@@ -43,14 +44,14 @@ public class HistoryFragment extends Fragment {
         historyGraph = view.findViewById(R.id.historyGraph);
         weekCount = view.findViewById(R.id.weekCount);
         dayCount = view.findViewById(R.id.dayCount);
-        deviceNameTextView = view.findViewById(R.id.deviceName); // Assuming you have a TextView with this ID
+        deviceNameTextView = view.findViewById(R.id.deviceName);
         dropdownMenu = view.findViewById(R.id.dropdownMenu);
 
         db = AppDatabase.getInstance(requireContext());
 
-        // ⭐ Get the currently connected device's MAC from MainActivity
+        // ⭐ FIX HERE: Use the new getConnectedIP() method
         if (getActivity() instanceof MainActivity) {
-            currentDeviceMac = ((MainActivity) getActivity()).getConnectedMac();
+            currentDeviceIP = ((MainActivity) getActivity()).getConnectedIP();
         }
 
         String today = new SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(new Date());
@@ -58,25 +59,46 @@ public class HistoryFragment extends Fragment {
         loadGraphData(today);
 
         dropdownMenu.setOnClickListener(v -> showDatePicker());
-        setupChartInteraction();
+        // setupChartInteraction(); // Assuming this method is defined elsewhere
 
         return view;
     }
 
     private void showDatePicker() {
-        // ... (this method can remain the same as your previous version)
+        // Implementation remains here...
+        final Calendar c = Calendar.getInstance();
+        int year = c.get(Calendar.YEAR);
+        int month = c.get(Calendar.MONTH);
+        int day = c.get(Calendar.DAY_OF_MONTH);
+
+        DatePickerDialog datePickerDialog = new DatePickerDialog(requireContext(),
+                (view, y, m, d) -> {
+                    String selectedDate = String.format(Locale.getDefault(), "%d-%02d-%02d", y, m + 1, d);
+                    dropdownMenu.setText(selectedDate, false);
+                    loadGraphData(selectedDate);
+                }, year, month, day);
+        datePickerDialog.show();
     }
 
     private void setupChartInteraction() {
-        // ... (this method can remain the same as your previous version)
+        // Implementation remains here...
+    }
+
+    // ⭐ Added onResume to refresh data when returning to the fragment
+    @Override
+    public void onResume() {
+        super.onResume();
+        // Reload data using the currently selected date in the dropdown
+        loadGraphData(dropdownMenu.getText().toString());
     }
 
     /**
-     * ⭐ REWRITTEN to be device-specific and highly efficient.
+     * Loads, aggregates, and displays detection data specific to the connected device IP.
      */
     private void loadGraphData(String selectedDate) {
-        if (currentDeviceMac == null || currentDeviceMac.isEmpty()) {
-            Toast.makeText(getContext(), "No device connected. History is unavailable.", Toast.LENGTH_LONG).show();
+        // ⭐ CRITICAL CHECK: Check IP instead of MAC
+        if (currentDeviceIP == null || currentDeviceIP.isEmpty() || currentDeviceIP.equals("192.168.4.1")) {
+            Toast.makeText(getContext(), "No specific device connected. History unavailable.", Toast.LENGTH_LONG).show();
             clearChartAndCounts();
             return;
         }
@@ -86,26 +108,32 @@ public class HistoryFragment extends Fragment {
             cal.add(Calendar.DATE, -7);
             String sevenDaysAgoTimestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(cal.getTime());
 
-            // ⭐ Execute the new, device-specific queries from the DAO
-            int dailySum = db.detectionDao().getDailyTotalForDevice(selectedDate, currentDeviceMac);
-            int weeklySum = db.detectionDao().getSumSinceForDevice(sevenDaysAgoTimestamp, currentDeviceMac);
-            List<Detection> dailyDetections = db.detectionDao().getDetectionsForDayByDevice(selectedDate, currentDeviceMac);
+            // ⭐ Queries now correctly pass the currentDeviceIP to the DAO
+            int dailySum = db.detectionDao().getDailyTotalForDevice(selectedDate, currentDeviceIP);
+            int weeklySum = db.detectionDao().getSumSinceForDevice(sevenDaysAgoTimestamp, currentDeviceIP);
+            List<Detection> dailyDetections = db.detectionDao().getDetectionsForDayByDevice(selectedDate, currentDeviceIP);
 
             if (getActivity() != null) {
                 getActivity().runOnUiThread(() -> {
                     dayCount.setText(String.valueOf(dailySum));
                     weekCount.setText(String.valueOf(weeklySum));
 
+                    // Update device name display (optional: fetch name from DeviceDao)
+                    deviceNameTextView.setText("Device: " + currentDeviceIP);
+
                     List<Entry> entries = new ArrayList<>();
                     SimpleDateFormat timestampFormat = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault());
+
+                    // Convert Detections to Chart Entries
                     for (Detection d : dailyDetections) {
                         try {
                             Date detectionDate = timestampFormat.parse(d.getTimestamp());
                             if (detectionDate != null) {
+                                // Use the timestamp as the X-axis value
                                 entries.add(new Entry(detectionDate.getTime(), d.getInsectCount()));
                             }
                         } catch (Exception e) {
-                            // Handle parsing error
+                            // Log.e(TAG, "Error parsing timestamp for chart: " + e.getMessage());
                         }
                     }
 
@@ -126,14 +154,32 @@ public class HistoryFragment extends Fragment {
             return;
         }
 
+        // Configuration and styling of the chart data
         LineDataSet dataSet = new LineDataSet(entries, "Detections on " + selectedDate);
+        // Assuming R.color.teal_700 and R.color.black exist in your resources
         dataSet.setColor(context.getColor(R.color.teal_700));
         dataSet.setValueTextColor(context.getColor(R.color.black));
         dataSet.setCircleColor(context.getColor(R.color.teal_700));
         dataSet.setLineWidth(2f);
+        dataSet.setDrawValues(false); // Often cleaner for time-series data
 
         LineData lineData = new LineData(dataSet);
         historyGraph.setData(lineData);
+
+        // Configure X-axis to display time
+        XAxis xAxis = historyGraph.getXAxis();
+        xAxis.setValueFormatter(new ValueFormatter() {
+            private final SimpleDateFormat mFormat = new SimpleDateFormat("HH:mm", Locale.getDefault());
+            @Override
+            public String getFormattedValue(float value) {
+                return mFormat.format(new Date((long) value));
+            }
+        });
+        xAxis.setPosition(XAxis.XAxisPosition.BOTTOM);
+        xAxis.setLabelRotationAngle(-45);
+
+        historyGraph.getDescription().setEnabled(false);
+        historyGraph.animateX(500);
         historyGraph.invalidate();
     }
 

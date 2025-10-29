@@ -12,7 +12,7 @@ import com.example.capstone2.entities.Detection;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-@Database(entities = {Device.class, Detection.class}, version = 2, exportSchema = false)
+@Database(entities = {Device.class, Detection.class}, version = 3, exportSchema = false)
 public abstract class AppDatabase extends RoomDatabase {
 
     private static volatile AppDatabase INSTANCE;

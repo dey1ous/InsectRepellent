@@ -1,20 +1,11 @@
 package com.example.capstone2;
 
-import android.Manifest;
-import android.bluetooth.BluetoothAdapter;
-import android.bluetooth.BluetoothDevice;
-import android.bluetooth.BluetoothSocket;
-import android.content.pm.PackageManager;
-import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 import android.widget.Toast;
 
 import androidx.activity.EdgeToEdge;
-import androidx.annotation.NonNull;
-import androidx.annotation.RequiresPermission;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.app.ActivityCompat;
 import androidx.fragment.app.Fragment;
 import androidx.fragment.app.FragmentManager;
 import androidx.fragment.app.FragmentTransaction;
@@ -24,43 +15,65 @@ import com.example.capstone2.databinding.ActivityMainBinding;
 import com.example.capstone2.entities.Detection;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
 
+// ⭐ NEW IMPORTS FOR NETWORKING
+import org.json.JSONObject;
 import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
-import java.util.UUID;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class MainActivity extends AppCompatActivity {
 
-    private static final String TAG = "HC05_DEBUG";
-    private static final UUID HC05_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
-    public static final int REQUEST_BT_PERMISSIONS = 101;
-    private static final int MAX_RETRIES = 5;
+    private static final String TAG = "ESP32_WIFI_SERVER";
+    private static final int DATA_POLL_INTERVAL_SECONDS = 3;
 
     private ActivityMainBinding binding;
     private AppDatabase db;
-    private BluetoothAdapter adapter;
-    private BluetoothSocket socket;
 
-    private volatile boolean isReading = false;
-    private String connectedMac;
-    private int latestCount = 0;
-
-    // ⭐ FIX: Add a flag to prevent multiple simultaneous connection attempts.
-    private final AtomicBoolean isConnecting = new AtomicBoolean(false);
+    // ⭐ WIFI VARIABLES REPLACING BLUETOOTH
+    private String connectedIP = "192.168.4.1"; // Default IP
+    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+    // 'isPolling' is private, but accessed via the public isPolling() method below.
+    private volatile boolean isPolling = false;
 
     private HomeFragment homeFragment;
-    private BluetoothFragment bluetoothFragment;
+    private WifiConnectFragment wifiFragment;
     private HistoryFragment historyFragment;
     private SettingsFragment settingsFragment;
 
-    public String getConnectedMac() {
-        return connectedMac;
+    private int latestCount = 0;
+
+    // ---------------------- FRAGMENT ACCESS METHODS (FIXES ERRORS) ---------------------- //
+
+    /**
+     * FIX 1: Allows fragments to set the IP address for the HTTP requests.
+     * Called by WifiConnectFragment when the user hits 'Connect'.
+     * @param ip The new IP address entered by the user.
+     */
+    public void setConnectedIP(String ip) {
+        this.connectedIP = ip;
     }
+
+    /**
+     * Allows fragments to read the connection status.
+     * @return true if the scheduled data fetching is currently active.
+     */
+    public boolean isPolling() {
+        return isPolling;
+    }
+
+    // Existing getter:
+    public String getConnectedIP() {
+        return connectedIP;
+    }
+
+    // ---------------------- LIFECYCLE & SETUP ---------------------- //
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -70,180 +83,167 @@ public class MainActivity extends AppCompatActivity {
         setContentView(binding.getRoot());
 
         db = AppDatabase.getInstance(this);
-        adapter = BluetoothAdapter.getDefaultAdapter();
 
         homeFragment = new HomeFragment();
-        bluetoothFragment = new BluetoothFragment();
+        wifiFragment = new WifiConnectFragment();
         historyFragment = new HistoryFragment();
         settingsFragment = new SettingsFragment();
 
         replaceFragment(homeFragment, "HOME_FRAGMENT");
         setupBottomNavigation();
         setupFloatingButton();
+
+        // Start polling automatically when the app starts
+        startPollingData();
     }
 
-    // ---------------------- BLUETOOTH ---------------------- //
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        stopPollingData();
+    }
 
-    @RequiresPermission(allOf = {Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT})
-    public void connectToDevice(String macAddress) {
-        // ⭐ FIX: Check if a connection is already in progress.
-        if (isConnecting.get()) {
-            showToast("Connection already in progress...");
-            return;
-        }
+    // ---------------------- WIFI / HTTP COMMUNICATION ---------------------- //
 
-        if (adapter == null) {
-            showToast("Bluetooth not supported.");
-            return;
-        }
-        if (!adapter.isEnabled()) {
-            showToast("Please enable Bluetooth first.");
-            return;
-        }
-        if (!hasPermission(Manifest.permission.BLUETOOTH_CONNECT)) {
-            connectedMac = macAddress; // Set mac before asking
-            requestBluetoothPermissions();
-            return;
-        }
-
-        connectedMac = macAddress;
-
-        // ⭐ FIX: Set the flag to true BEFORE starting the connection process.
-        isConnecting.set(true);
-
-        AppDatabase.databaseWriteExecutor.execute(() -> {
+    /**
+     * Sends a command (e.g., "ON", "OFF") to the ESP32 server asynchronously.
+     * @param command The API route (e.g., "ON")
+     */
+    public void sendCommand(final String command) {
+        scheduler.execute(() -> {
+            String urlString = "http://" + connectedIP + "/" + command;
+            Log.d(TAG, "Sending command: " + urlString);
             try {
-                Thread.sleep(50);
-                BluetoothDevice device = adapter.getRemoteDevice(macAddress);
-                connectWithRetries(device);
-            } catch (IllegalArgumentException | InterruptedException e) {
-                isConnecting.set(false); // ⭐ FIX: Reset the flag on failure.
-                runOnUiThread(() -> showToast("Invalid MAC address or thread interrupted."));
+                makeHttpRequest(urlString, false);
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to send command " + command, e);
+                runOnUiThread(() -> showToast("Command failed: " + e.getMessage()));
             }
         });
     }
 
-    @RequiresPermission(allOf = {Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN})
-    private void connectWithRetries(BluetoothDevice device) {
-        closeSocket();
-        cancelDiscovery();
+    /**
+     * Starts a scheduled task to continuously request data from the ESP32.
+     */
+    public void startPollingData() {
+        // Only start if it's not already running
+        if (isPolling) return;
+        isPolling = true;
 
-        for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-            try {
-                socket = device.createInsecureRfcommSocketToServiceRecord(HC05_UUID);
-                Log.d(TAG, "Connecting... Attempt " + attempt);
-                socket.connect();
-
-                runOnUiThread(() -> showToast("✅ Connected to " + (device.getName() != null ? device.getName() : "Unknown Device")));
-                isConnecting.set(false); // ⭐ FIX: Reset the flag on successful connection.
-                startReading(socket);
-                return;
-
-            } catch (IOException e) {
-                Log.w(TAG, "Connection Attempt " + attempt + " failed: " + e.getMessage());
-                try {
-                    if (socket != null) socket.close();
-                } catch (IOException closeIgnored) {
-                    // Ignored
-                }
-                try {
-                    Thread.sleep(500);
-                } catch (InterruptedException interruptedException) {
-                    Thread.currentThread().interrupt();
-                    Log.e(TAG, "Retry loop interrupted.");
-                    runOnUiThread(() -> showToast("Connection attempt was cancelled."));
-                    isConnecting.set(false); // ⭐ FIX: Reset the flag if interrupted.
-                    return;
-                }
-            }
-        }
-
-        Log.e(TAG, "Connection failed after all retries.");
-        runOnUiThread(() -> showToast("Connection failed. Please ensure the device is on and paired."));
-        isConnecting.set(false); // ⭐ FIX: Reset the flag after all retries fail.
-        closeSocket();
+        // Schedules a task to run every DATA_POLL_INTERVAL_SECONDS
+        scheduler.scheduleAtFixedRate(this::fetchLatestData, 0, DATA_POLL_INTERVAL_SECONDS, TimeUnit.SECONDS);
+        runOnUiThread(() -> showToast("Started polling data from " + connectedIP));
     }
 
-    @RequiresPermission(Manifest.permission.BLUETOOTH_SCAN)
-    private void cancelDiscovery() {
-        if (adapter != null && adapter.isDiscovering()) {
-            adapter.cancelDiscovery();
-        }
-    }
-    private void startReading(BluetoothSocket connectedSocket) {
-        isReading = true;
-        AppDatabase.databaseWriteExecutor.execute(() -> {
-            try (InputStream in = connectedSocket.getInputStream();
-                 BufferedReader reader = new BufferedReader(new InputStreamReader(in))) {
-                String line;
-                while (isReading && (line = reader.readLine()) != null) {
-                    handleIncomingData(line.trim());
-                }
-            } catch (IOException e) {
-                if(isReading) {
-                    Log.e(TAG, "Disconnected: " + e.getMessage());
-                    runOnUiThread(() -> showToast("Device disconnected."));
-                }
-            } finally {
-                closeSocket();
-            }
-        });
+    /**
+     * Stops the scheduled data fetching task.
+     */
+    public void stopPollingData() {
+        if (!isPolling) return;
+        scheduler.shutdownNow();
+        isPolling = false;
+        runOnUiThread(() -> showToast("Stopped polling."));
     }
 
-    private void handleIncomingData(String line) {
+    /**
+     * Fetches the JSON data string from the ESP32's /data endpoint.
+     */
+    private void fetchLatestData() {
+        String urlString = "http://" + connectedIP + "/data";
+        String jsonResponse = null;
+
         try {
-            if (line.contains(",")) {
-                String[] parts = line.split(",");
-                int code = Integer.parseInt(parts[0].trim());
-                int count = Integer.parseInt(parts[1].trim());
-
-                if (code == 2) {
-                    latestCount = count;
-                    String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(new Date());
-                    Detection detection = new Detection(connectedMac, timestamp, count);
-
-                    AppDatabase.databaseWriteExecutor.execute(() -> db.detectionDao().insert(detection));
-
-                    if(homeFragment != null && homeFragment.isAdded()) {
-                        runOnUiThread(() -> homeFragment.updateInsectCount(count));
-                    }
-                }
-            } else {
-                int code = Integer.parseInt(line);
-                if(homeFragment != null && homeFragment.isAdded()) {
-                    runOnUiThread(() -> {
-                        if (code == 0 || code == 1) homeFragment.updateSystemStatus(code);
-                        else if (code >= 3 && code <= 5) homeFragment.updateLiquidStatus(code);
-                    });
-                }
+            jsonResponse = makeHttpRequest(urlString, true);
+            if (jsonResponse != null) {
+                handleIncomingJSON(jsonResponse);
             }
         } catch (Exception e) {
-            Log.e(TAG, "Parse error: " + line + " → " + e.getMessage());
+            // Note: This error is common if the ESP32 is offline or the IP is wrong
+            Log.e(TAG, "Data fetch error from " + urlString + ": " + e.getMessage());
         }
     }
 
-    // ---------------------- DISCONNECT ---------------------- //
-
-    public void disconnectFromDevice() {
-        isReading = false;
-        closeSocket();
-        showToast("Disconnected from device");
-    }
-
-    private void closeSocket() {
+    /**
+     * Core method to execute the HTTP GET request.
+     * @param urlString The full URL to request.
+     * @param readResponse Whether to read the response body (true for /data, false for commands)
+     * @return The response body string or null on failure.
+     */
+    private String makeHttpRequest(String urlString, boolean readResponse) throws Exception {
+        HttpURLConnection urlConnection = null;
         try {
-            if (socket != null) {
-                socket.close();
+            URL url = new URL(urlString);
+            urlConnection = (HttpURLConnection) url.openConnection();
+            urlConnection.setRequestMethod("GET");
+            urlConnection.setConnectTimeout(2000);
+            urlConnection.setReadTimeout(2000);
+
+            int responseCode = urlConnection.getResponseCode();
+            if (responseCode == HttpURLConnection.HTTP_OK) {
+                if (readResponse) {
+                    BufferedReader reader = new BufferedReader(new InputStreamReader(urlConnection.getInputStream()));
+                    StringBuilder result = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        result.append(line);
+                    }
+                    reader.close();
+                    return result.toString();
+                } else {
+                    return "Command Sent";
+                }
+            } else {
+                Log.w(TAG, "Server responded with code: " + responseCode + " at " + urlString);
+                return null;
             }
-        } catch (IOException e) {
-            Log.e(TAG, "Could not close the client socket", e);
         } finally {
-            socket = null;
-            isReading = false;
+            if (urlConnection != null) {
+                urlConnection.disconnect();
+            }
         }
     }
 
-    // ---------------------- UI & NAVIGATION ---------------------- //
+    // ---------------------- DATA PARSING & UI UPDATE ---------------------- //
+
+    /**
+     * Parses the JSON string received from the ESP32 and updates the UI/Database.
+     * Expected JSON structure: {"detection": 1, "status": "ON", "capacity": 85}
+     */
+    private void handleIncomingJSON(String json) {
+        try {
+            final JSONObject jsonObject = new JSONObject(json);
+
+            // 1. Get and process sensor data
+            final int currentDetection = jsonObject.getInt("detection");
+            final String deviceStatus = jsonObject.getString("status");
+            final int liquidCapacity = jsonObject.getInt("capacity");
+
+            // ⭐ LOGIC for Database (Only save detection if one occurred)
+            if (currentDetection == 1) {
+                // IMPORTANT: This logic assumes 'currentDetection' is 1 only when a *new* insect is detected.
+                latestCount = latestCount + 1;
+                final String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(new Date());
+                final Detection detection = new Detection(connectedIP, timestamp, latestCount);
+
+                // Save to database on background thread
+                AppDatabase.databaseWriteExecutor.execute(() -> db.detectionDao().insert(detection));
+            }
+
+            // 2. Update UI on the main thread
+            if (homeFragment != null && homeFragment.isAdded()) {
+                runOnUiThread(() -> {
+                    homeFragment.updateInsectCount(latestCount);
+                    homeFragment.updateSystemStatus(deviceStatus.equals("ON") ? 1 : 0);
+                    homeFragment.updateLiquidStatus(liquidCapacity);
+                });
+            }
+
+        } catch (Exception e) {
+            Log.e(TAG, "JSON/Parse error: " + json + " → " + e.getMessage());
+        }
+    }
+
+    // ---------------------- UTILITIES & NAVIGATION ---------------------- //
 
     private void setupBottomNavigation() {
         binding.bottomNavigationView.setBackground(null);
@@ -252,7 +252,7 @@ public class MainActivity extends AppCompatActivity {
             if (id == R.id.home) {
                 replaceFragment(homeFragment, "HOME_FRAGMENT");
             } else if (id == R.id.bluetooth) {
-                replaceFragment(bluetoothFragment, "BLUETOOTH_FRAGMENT");
+                replaceFragment(wifiFragment, "WIFI_FRAGMENT");
             } else if (id == R.id.history) {
                 replaceFragment(historyFragment, "HISTORY_FRAGMENT");
             } else if (id == R.id.settings) {
@@ -264,20 +264,7 @@ public class MainActivity extends AppCompatActivity {
 
     private void setupFloatingButton() {
         FloatingActionButton fab = findViewById(R.id.fab_refresh);
-        fab.setOnClickListener(v -> refreshCurrentFragment());
-    }
-
-    private void refreshCurrentFragment() {
-        Fragment current = getSupportFragmentManager().findFragmentById(R.id.frame_layout);
-        if (current instanceof HomeFragment) {
-            fetchLatestCount();
-            showToast("Home refreshed");
-        } else if (current instanceof HistoryFragment) {
-            // Let onResume handle the refresh for History
-            showToast("History refreshed");
-        } else {
-            showToast("Nothing to refresh");
-        }
+        fab.setOnClickListener(v -> fetchLatestData());
     }
 
     private void replaceFragment(Fragment fragment, String tag) {
@@ -287,69 +274,14 @@ public class MainActivity extends AppCompatActivity {
         ft.commitAllowingStateLoss();
     }
 
-    // ---------------------- PERMISSIONS ---------------------- //
-
-    private void requestBluetoothPermissions() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            ActivityCompat.requestPermissions(this, new String[]{
-                    Manifest.permission.BLUETOOTH_CONNECT,
-                    Manifest.permission.BLUETOOTH_SCAN,
-                    Manifest.permission.ACCESS_FINE_LOCATION
-            }, REQUEST_BT_PERMISSIONS);
-        } else {
-            ActivityCompat.requestPermissions(this, new String[]{
-                    Manifest.permission.BLUETOOTH,
-                    Manifest.permission.BLUETOOTH_ADMIN,
-                    Manifest.permission.ACCESS_FINE_LOCATION
-            }, REQUEST_BT_PERMISSIONS);
-        }
-    }
-
-    private boolean hasPermission(String perm) {
-        return ActivityCompat.checkSelfPermission(this, perm) == PackageManager.PERMISSION_GRANTED;
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode,
-                                           @NonNull String[] permissions,
-                                           @NonNull int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == REQUEST_BT_PERMISSIONS) {
-            boolean allGranted = true;
-            for (int result : grantResults) {
-                if (result != PackageManager.PERMISSION_GRANTED) {
-                    allGranted = false;
-                    break;
-                }
-            }
-            if (allGranted) {
-                if (connectedMac != null) {
-                    connectToDevice(connectedMac);
-                }
-            } else {
-                showToast("Bluetooth permissions are required to connect.");
-            }
-        }
-    }
-
     private void showToast(String msg) {
         runOnUiThread(() -> Toast.makeText(this, msg, Toast.LENGTH_SHORT).show());
     }
 
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        disconnectFromDevice();
-    }
-
-    // ---------------------- DATA FETCHING ---------------------- //
-
     public void fetchLatestCount() {
-        if (connectedMac == null) return;
         AppDatabase.databaseWriteExecutor.execute(() -> {
             try {
-                // Ensure DAO returns a primitive or handles null
-                Integer count = db.detectionDao().getTodayTotalCount(connectedMac);
+                Integer count = db.detectionDao().getTodayTotalCount(connectedIP);
                 latestCount = (count != null) ? count : 0;
                 if(homeFragment != null && homeFragment.isAdded()){
                     runOnUiThread(() -> homeFragment.updateInsectCount(latestCount));

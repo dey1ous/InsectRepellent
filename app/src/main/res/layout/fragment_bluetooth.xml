@@ -11,26 +11,23 @@
         android:layout_height="wrap_content"
         android:padding="16dp">
 
-        <!-- Title -->
         <TextView
-            android:id="@+id/bluetoothTitle"
+            android:id="@+id/wifiTitle"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
             android:background="@drawable/home_background"
             android:gravity="center"
             android:padding="12dp"
-            android:text="Bluetooth Devices"
-            android:textColor="@android:color/white"
+            android:text="Wi-Fi / IP Configuration"  android:textColor="@android:color/white"
             android:textSize="22sp"
             android:textStyle="bold"
             app:layout_constraintTop_toTopOf="parent"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintEnd_toEndOf="parent" />
 
-        <!-- Bluetooth Card -->
         <LinearLayout
-            android:id="@+id/bluetoothCard"
+            android:id="@+id/ipCard"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:orientation="vertical"
@@ -38,25 +35,47 @@
             android:elevation="6dp"
             android:padding="20dp"
             android:layout_marginTop="20dp"
-            app:layout_constraintTop_toBottomOf="@id/bluetoothTitle"
+            app:layout_constraintTop_toBottomOf="@id/wifiTitle"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintEnd_toEndOf="parent">
 
-            <Button
-                android:id="@+id/btnScan"
+            <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="🔍 Scan Devices"
+                android:text="ESP32 IP Address:"
+                android:textColor="@color/black"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <EditText
+                android:id="@+id/ipAddressInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:hint="e.g., 192.168.4.1"
+                android:inputType="numberDecimal"
+                android:lines="1"
+                android:maxLines="1"
+                android:imeOptions="actionDone"
+                android:textSize="18sp"
+                android:textColor="@color/black"
+                android:autofillHints="none" />
+
+            <Button
+                android:id="@+id/btnConnectIP"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="✅ Connect &amp; Start Polling"
                 android:textSize="16sp"
                 android:backgroundTint="@color/teal_700"
-                android:textColor="@android:color/white" />
+                android:textColor="@android:color/white"
+                android:layout_marginTop="20dp" />
 
             <Button
                 android:id="@+id/btnDisconnect"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="❌ Disconnect"
-                android:textSize="16sp"
+                android:text="🛑 Stop Polling" android:textSize="16sp"
                 android:backgroundTint="@android:color/black"
                 android:textColor="@android:color/white"
                 android:layout_marginTop="10dp" />
@@ -65,19 +84,10 @@
                 android:id="@+id/txtStatus"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Status: Not connected"
-                android:textColor="@color/black"
+                android:text="Status: Not polling" android:textColor="@color/black"
                 android:textSize="14sp"
                 android:layout_marginTop="12dp"
                 android:textStyle="italic" />
-
-            <ListView
-                android:id="@+id/listViewDevices"
-                android:layout_width="match_parent"
-                android:layout_height="300dp"
-                android:layout_marginTop="10dp"
-                android:divider="@android:color/darker_gray"
-                android:dividerHeight="1dp" />
 
         </LinearLayout>
 
