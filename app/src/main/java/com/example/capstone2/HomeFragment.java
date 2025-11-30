@@ -38,37 +38,60 @@ public class HomeFragment extends Fragment {
         }
     }
 
-    public void updateSystemStatus(int code) {
+    /**
+     * UPDATED: Accepts String because ESP32 sends "status": "OFF"/"Idle"/"Repel Active"
+     */
+    public void updateSystemStatus(String statusText) {
         if (getActivity() != null && systemStatus != null) {
             getActivity().runOnUiThread(() -> {
-                if (code == 0) {
-                    systemStatus.setText("System Status: OFF");
+                systemStatus.setText("System Status: " + statusText);
+
+                if ("OFF".equalsIgnoreCase(statusText)) {
                     systemStatus.setTextColor(getResources().getColor(android.R.color.holo_red_dark));
-                } else if (code == 1) {
-                    systemStatus.setText("System Status: ON");
+                } else {
+                    // "Idle", "Repel Active", "Startup" -> Green
                     systemStatus.setTextColor(getResources().getColor(android.R.color.holo_green_dark));
                 }
             });
         }
     }
 
-    public void updateLiquidStatus(int code) {
+    /**
+     * UPDATED: Aligned with ESP32 JSON "liquid_low": boolean
+     *
+     * @param isLiquidLow true = LOW (Red), false = FULL (Green)
+     */
+    public void updateLiquidStatus(boolean isLiquidLow) {
         if (getActivity() != null && solutionStatus != null) {
             getActivity().runOnUiThread(() -> {
-                if (code == 3) {
+                // If liquid_low is TRUE, it means the tank is empty/low -> RED Warning
+                if (isLiquidLow) {
                     solutionStatus.setText("Solution Status: LOW");
                     solutionStatus.setTextColor(getResources().getColor(android.R.color.holo_red_dark));
-                } else if (code == 4) {
-                    solutionStatus.setText("Solution Status: MEDIUM");
-                    solutionStatus.setTextColor(getResources().getColor(android.R.color.holo_orange_dark));
-                } else if (code == 5) {
+                }
+                // If liquid_low is FALSE, it means the tank is OK -> GREEN
+                else {
                     solutionStatus.setText("Solution Status: FULL");
                     solutionStatus.setTextColor(getResources().getColor(android.R.color.holo_green_dark));
-                } else {
-                    solutionStatus.setText("Solution Status: ---");
-                    solutionStatus.setTextColor(getResources().getColor(android.R.color.black));
                 }
             });
+        }
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+
+        if (getActivity() instanceof MainActivity) {
+            MainActivity activity = (MainActivity) getActivity();
+
+            activity.fetchLatestCount();
+
+            // FIX: This now receives a String (e.g., "Idle")
+            updateSystemStatus(activity.getLatestSystemStatus());
+
+            // FIX: This now receives a boolean (true/false)
+            updateLiquidStatus(activity.getLatestLiquidStatus());
         }
     }
 }

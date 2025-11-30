@@ -1,12 +1,19 @@
+
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
 }
 
+// 1. Load the local.properties file (Kotlin syntax)
+val properties = Properties()
+if (rootProject.file("local.properties").exists()) {
+    properties.load(rootProject.file("local.properties").inputStream())
+}
+
 android {
     namespace = "com.example.capstone2"
-    compileSdk {
-        version = release(36)
-    }
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.example.capstone2"
@@ -16,6 +23,9 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // This line adds the key to BuildConfig
+        buildConfigField("String", "AIO_KEY", "\"${properties.getProperty("AIO_KEY")}\"")
     }
 
     buildTypes {
@@ -33,6 +43,9 @@ android {
     }
     buildFeatures {
         viewBinding = true
+
+        // ⭐ FIX: Add this line to enable the BuildConfig feature
+        buildConfig = true
     }
 }
 
@@ -52,7 +65,9 @@ dependencies {
     implementation(libs.camerax.camera2)
     implementation(libs.camerax.lifecycle)
     implementation(libs.camerax.view)
-
+    implementation(libs.localbroadcastmanager)
     implementation(libs.mlkit.barcode)
     annotationProcessor(libs.room.compiler)
+    implementation(libs.paho.mqtt.client)
+    implementation(libs.paho.android.service)
 }

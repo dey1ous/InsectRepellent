@@ -1,12 +1,15 @@
 package com.example.capstone2;
 
+import android.app.ActivityManager;
+import android.content.Context;
+import android.content.Intent;
+import android.os.Build;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
-import android.widget.EditText;
-import android.widget.TextView; // Required for txtStatus
+import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
@@ -15,37 +18,23 @@ import androidx.fragment.app.Fragment;
 
 public class WifiConnectFragment extends Fragment {
 
-    // UI Components matching the XML
-    private EditText ipAddressInput;
-    private Button btnConnectIP;
+    // UI Components
+    private Button btnConnectMQTT;
     private Button btnDisconnect;
     private TextView txtStatus;
 
     @Nullable
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
-        // NOTE: Ensure your fragment XML file is correctly linked here.
-        View view = inflater.inflate(R.layout.fragment_bluetooth, container, false);
+        View view = inflater.inflate(R.layout.fragment_wifi_connect, container, false);
 
         // 1. Initialize UI Elements
-        ipAddressInput = view.findViewById(R.id.ipAddressInput);
-        btnConnectIP = view.findViewById(R.id.btnConnectIP);
+        btnConnectMQTT = view.findViewById(R.id.btnConnectIP); // Ensure this ID matches your XML
         btnDisconnect = view.findViewById(R.id.btnDisconnect);
         txtStatus = view.findViewById(R.id.txtStatus);
 
-        // 2. Set Default IP and Status
-        if (getActivity() instanceof MainActivity) {
-            // Load the current IP being polled by MainActivity
-            ipAddressInput.setText(((MainActivity) getActivity()).getConnectedIP());
-            // Update UI based on MainActivity's current state
-            updateStatusText();
-        } else {
-            // Set a common ESP32 default if context isn't ready
-            ipAddressInput.setText("192.168.4.1");
-        }
-
-        // 3. Set Listeners
-        btnConnectIP.setOnClickListener(v -> connectToIP());
+        // 2. Set Listeners
+        btnConnectMQTT.setOnClickListener(v -> connectToBroker());
         btnDisconnect.setOnClickListener(v -> disconnectDevice());
 
         return view;
@@ -54,72 +43,75 @@ public class WifiConnectFragment extends Fragment {
     @Override
     public void onResume() {
         super.onResume();
-        // Update status whenever the fragment becomes visible
+        // Check if service is running when we open this screen
         updateStatusText();
     }
 
     // ------------------ CONNECT / DISCONNECT LOGIC ------------------
 
-    private void connectToIP() {
-        String ipAddress = ipAddressInput.getText().toString().trim();
+    private void connectToBroker() {
+        if (getContext() == null) return;
 
-        if (ipAddress.isEmpty()) {
-            showToast("Please enter the ESP32 IP address.");
-            return;
+        // Start the Service directly
+        Intent serviceIntent = new Intent(getContext(), InsectMonitorService.class);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            getContext().startForegroundService(serviceIntent);
+        } else {
+            getContext().startService(serviceIntent);
         }
 
-        // Basic IP format validation
-        if (!ipAddress.matches("^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}$")) {
-            showToast("Invalid IP format.");
-            return;
-        }
+        showToast("Starting Insect Monitor Service...");
 
-        if (getActivity() instanceof MainActivity) {
-            MainActivity activity = (MainActivity) getActivity();
-
-            // 1. Set the new IP in MainActivity
-            activity.setConnectedIP(ipAddress);
-
-            // 2. Start the scheduled data polling
-            activity.startPollingData();
-
-            showToast("Polling attempts started for " + ipAddress);
-            updateStatusText();
-        }
+        // Update UI after a short delay to allow service to start
+        txtStatus.postDelayed(this::updateStatusText, 500);
     }
 
     private void disconnectDevice() {
-        if (getActivity() instanceof MainActivity) {
-            // Stop the scheduled data polling
-            ((MainActivity) getActivity()).stopPollingData();
-            showToast("Polling stopped.");
-            updateStatusText();
-        }
+        if (getContext() == null) return;
+
+        // Stop the Service
+        Intent serviceIntent = new Intent(getContext(), InsectMonitorService.class);
+        getContext().stopService(serviceIntent);
+
+        showToast("Service Stopped.");
+        updateStatusText();
     }
 
     // ------------------ UI UTILITIES ------------------
 
-    /**
-     * Updates the status TextView based on MainActivity's polling state.
-     */
-    // ⭐ Helper method to reflect the current polling status
     private void updateStatusText() {
-        if (getActivity() instanceof MainActivity) {
-            MainActivity activity = (MainActivity) getActivity();
+        boolean isRunning = isServiceRunning(InsectMonitorService.class);
 
-            // 🚨 FIX HERE: Call the public method isPolling() instead of accessing the private variable directly.
-            boolean isPollingNow = activity.isPolling();
+        if (isRunning) {
+            txtStatus.setText("Status: Monitoring Active\n(Service Running)");
+            txtStatus.setTextColor(getResources().getColor(android.R.color.holo_green_dark));
+            btnConnectMQTT.setEnabled(false); // Disable connect button if already running
+            btnDisconnect.setEnabled(true);
+        } else {
+            txtStatus.setText("Status: Stopped");
+            txtStatus.setTextColor(getResources().getColor(android.R.color.holo_red_dark));
+            btnConnectMQTT.setEnabled(true);
+            btnDisconnect.setEnabled(false);
+        }
+    }
 
-            String ip = activity.getConnectedIP();
+    /**
+     * Helper method to check if the InsectMonitorService is currently running in background.
+     */
+    private boolean isServiceRunning(Class<?> serviceClass) {
+        if (getContext() == null) return false;
 
-            if (isPollingNow) {
-                txtStatus.setText("Status: Polling Data at " + ip);
-                txtStatus.setTextColor(getResources().getColor(android.R.color.holo_green_dark));
-            } else {
-                txtStatus.setText("Status: Not Polling. Last IP: " + ip);
-                txtStatus.setTextColor(getResources().getColor(android.R.color.black));
+        ActivityManager manager = (ActivityManager) getContext().getSystemService(Context.ACTIVITY_SERVICE);
+        if (manager != null) {
+            // Check through running services
+            for (ActivityManager.RunningServiceInfo service : manager.getRunningServices(Integer.MAX_VALUE)) {
+                if (serviceClass.getName().equals(service.service.getClassName())) {
+                    return true;
+                }
             }
         }
+        return false;
     }
 
     private void showToast(String msg) {

@@ -1,7 +1,9 @@
 package com.example.capstone2;
 
 import android.Manifest;
+import android.content.Context;
 import android.content.DialogInterface;
+import android.content.SharedPreferences; // Import SharedPreferences
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -22,6 +24,10 @@ import com.google.android.material.materialswitch.MaterialSwitch;
 
 public class SettingsFragment extends Fragment {
 
+    // MUST match the names used in NotificationHelper and InsectMonitorService
+    private static final String PREFS_NAME = "AppPrefs";
+    private static final String PREF_NOTIFY_KEY = "NOTIFY_ON";
+
     private androidx.activity.result.ActivityResultLauncher<String> requestNotificationPermissionLauncher;
 
     @Override
@@ -37,21 +43,36 @@ public class SettingsFragment extends Fragment {
         MaterialSwitch switchNotification = view.findViewById(R.id.switchNotification);
         LinearLayout rowLeaveApp = view.findViewById(R.id.rowLeaveApp);
 
-        // Permission request launcher for notifications
+        // 1. SETUP SHARED PREFERENCES
+        SharedPreferences prefs = requireContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+
+        // 2. READ SAVED STATE (Set the switch to the correct position when opening the screen)
+        boolean isEnabled = prefs.getBoolean(PREF_NOTIFY_KEY, true); // Default is true
+        switchNotification.setChecked(isEnabled);
+
+        // Permission request launcher
         requestNotificationPermissionLauncher = registerForActivityResult(
                 new androidx.activity.result.contract.ActivityResultContracts.RequestPermission(),
                 isGranted -> {
                     if (isGranted) {
                         Toast.makeText(requireContext(), "Notification permission granted", Toast.LENGTH_SHORT).show();
                     } else {
-                        Toast.makeText(requireContext(), "Permission denied", Toast.LENGTH_SHORT).show();
+                        // If denied, turn the switch back off visually and in storage
+                        switchNotification.setChecked(false);
+                        prefs.edit().putBoolean(PREF_NOTIFY_KEY, false).apply();
+                        Toast.makeText(requireContext(), "Permission denied. Notifications disabled.", Toast.LENGTH_SHORT).show();
                     }
                 }
         );
 
         // 🔔 Notification switch logic
         switchNotification.setOnCheckedChangeListener((buttonView, isChecked) -> {
+
+            // 3. SAVE THE SETTING IMMEDIATELY
+            prefs.edit().putBoolean(PREF_NOTIFY_KEY, isChecked).apply();
+
             if (isChecked) {
+                // Check Android 13+ Permissions
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                     if (ActivityCompat.checkSelfPermission(requireContext(), Manifest.permission.POST_NOTIFICATIONS)
                             != PackageManager.PERMISSION_GRANTED) {
@@ -60,6 +81,8 @@ public class SettingsFragment extends Fragment {
                     }
                 }
 
+                // Show a test notification to confirm it works
+                // (NotificationHelper will check the preference we just saved and see it's true)
                 NotificationHelper.showNotification(requireContext(),
                         "Notifications Enabled",
                         "You will now receive alerts.");

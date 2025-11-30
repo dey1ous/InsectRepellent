@@ -1,5 +1,10 @@
 package com.example.capstone2;
 
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 import android.widget.Toast;
@@ -9,71 +14,55 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.fragment.app.Fragment;
 import androidx.fragment.app.FragmentManager;
 import androidx.fragment.app.FragmentTransaction;
+import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
 import com.example.capstone2.database.AppDatabase;
 import com.example.capstone2.databinding.ActivityMainBinding;
-import com.example.capstone2.entities.Detection;
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
-
-// ⭐ NEW IMPORTS FOR NETWORKING
-import org.json.JSONObject;
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.text.SimpleDateFormat;
-import java.util.Date;
-import java.util.Locale;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 
 public class MainActivity extends AppCompatActivity {
 
-    private static final String TAG = "ESP32_WIFI_SERVER";
-    private static final int DATA_POLL_INTERVAL_SECONDS = 3;
-
     private ActivityMainBinding binding;
     private AppDatabase db;
+    private volatile int latestCount = 0;
 
-    // ⭐ WIFI VARIABLES REPLACING BLUETOOTH
-    private String connectedIP = "192.168.4.1"; // Default IP
-    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
-    // 'isPolling' is private, but accessed via the public isPolling() method below.
-    private volatile boolean isPolling = false;
+    // UI State Holders
+    private String latestSystemStatus = "OFF";
+    private boolean latestLiquidStatus = false;
 
+    // Fragments
     private HomeFragment homeFragment;
     private WifiConnectFragment wifiFragment;
     private HistoryFragment historyFragment;
     private SettingsFragment settingsFragment;
 
-    private int latestCount = 0;
+    // Broadcast Receiver to get data from Service
+    private final BroadcastReceiver mqttReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (InsectMonitorService.ACTION_MQTT_UPDATE.equals(intent.getAction())) {
 
-    // ---------------------- FRAGMENT ACCESS METHODS (FIXES ERRORS) ---------------------- //
+                String status = intent.getStringExtra("status");
+                boolean liquid = intent.getBooleanExtra("liquid_low", false);
+                boolean detected = intent.getBooleanExtra("detected", false);
 
-    /**
-     * FIX 1: Allows fragments to set the IP address for the HTTP requests.
-     * Called by WifiConnectFragment when the user hits 'Connect'.
-     * @param ip The new IP address entered by the user.
-     */
-    public void setConnectedIP(String ip) {
-        this.connectedIP = ip;
-    }
+                // Update UI Variables
+                latestSystemStatus = status;
+                latestLiquidStatus = liquid;
 
-    /**
-     * Allows fragments to read the connection status.
-     * @return true if the scheduled data fetching is currently active.
-     */
-    public boolean isPolling() {
-        return isPolling;
-    }
+                // If detected, we should re-fetch the total count from DB
+                if (detected) {
+                    fetchLatestCount();
+                }
 
-    // Existing getter:
-    public String getConnectedIP() {
-        return connectedIP;
-    }
-
-    // ---------------------- LIFECYCLE & SETUP ---------------------- //
+                // Update Home Fragment if it is currently visible
+                if (homeFragment != null && homeFragment.isAdded()) {
+                    homeFragment.updateSystemStatus(latestSystemStatus);
+                    homeFragment.updateLiquidStatus(latestLiquidStatus);
+                }
+            }
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -84,6 +73,7 @@ public class MainActivity extends AppCompatActivity {
 
         db = AppDatabase.getInstance(this);
 
+        // Setup Fragments
         homeFragment = new HomeFragment();
         wifiFragment = new WifiConnectFragment();
         historyFragment = new HistoryFragment();
@@ -93,178 +83,100 @@ public class MainActivity extends AppCompatActivity {
         setupBottomNavigation();
         setupFloatingButton();
 
-        // Start polling automatically when the app starts
-        startPollingData();
+        // 1. START THE BACKGROUND SERVICE
+        startInsectService();
+
+        // 2. Initial Data Fetch
+        fetchLatestCount();
+    }
+
+    private void startInsectService() {
+        Intent serviceIntent = new Intent(this, InsectMonitorService.class);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent);
+        } else {
+            startService(serviceIntent);
+        }
     }
 
     @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        stopPollingData();
+    protected void onResume() {
+        super.onResume();
+
+        // 1. Register Receiver (Existing code)
+        IntentFilter filter = new IntentFilter(InsectMonitorService.ACTION_MQTT_UPDATE);
+        LocalBroadcastManager.getInstance(this).registerReceiver(mqttReceiver, filter);
+
+        // ⭐ NEW CODE: Load the last known state from storage
+        android.content.SharedPreferences prefs = getSharedPreferences("AppPrefs", MODE_PRIVATE);
+        latestSystemStatus = prefs.getString("LAST_STATUS", "OFF"); // Load saved status
+        latestLiquidStatus = prefs.getBoolean("LAST_LIQUID", false); // Load saved liquid
+
+        // 2. Refresh UI with these loaded values
+        fetchLatestCount();
+
+        // Force HomeFragment to update immediately
+        if (homeFragment != null && homeFragment.isAdded()) {
+            homeFragment.updateSystemStatus(latestSystemStatus);
+            homeFragment.updateLiquidStatus(latestLiquidStatus);
+        }
     }
 
-    // ---------------------- WIFI / HTTP COMMUNICATION ---------------------- //
+    @Override
+    protected void onPause() {
+        super.onPause();
+        // Unregister Receiver to save resources when app is minimized
+        LocalBroadcastManager.getInstance(this).unregisterReceiver(mqttReceiver);
+    }
 
-    /**
-     * Sends a command (e.g., "ON", "OFF") to the ESP32 server asynchronously.
-     * @param command The API route (e.g., "ON")
-     */
-    public void sendCommand(final String command) {
-        scheduler.execute(() -> {
-            String urlString = "http://" + connectedIP + "/" + command;
-            Log.d(TAG, "Sending command: " + urlString);
+    // --- DATA & UTILS ---
+
+    public void fetchLatestCount() {
+        AppDatabase.databaseWriteExecutor.execute(() -> {
             try {
-                makeHttpRequest(urlString, false);
+                Integer count = db.detectionDao().getTodayTotalCount("Deodeus");
+                latestCount = (count != null) ? count : 0;
+                runOnUiThread(() -> {
+                    if (homeFragment != null && homeFragment.isAdded()) {
+                        homeFragment.updateInsectCount(latestCount);
+                    }
+                });
             } catch (Exception e) {
-                Log.e(TAG, "Failed to send command " + command, e);
-                runOnUiThread(() -> showToast("Command failed: " + e.getMessage()));
+                Log.e("MainActivity", "DB fetch error", e);
             }
         });
     }
 
-    /**
-     * Starts a scheduled task to continuously request data from the ESP32.
-     */
-    public void startPollingData() {
-        // Only start if it's not already running
-        if (isPolling) return;
-        isPolling = true;
-
-        // Schedules a task to run every DATA_POLL_INTERVAL_SECONDS
-        scheduler.scheduleAtFixedRate(this::fetchLatestData, 0, DATA_POLL_INTERVAL_SECONDS, TimeUnit.SECONDS);
-        runOnUiThread(() -> showToast("Started polling data from " + connectedIP));
+    // ⭐ ADDED THESE METHODS SO HOME FRAGMENT CAN READ STATUS
+    public String getLatestSystemStatus() {
+        return latestSystemStatus;
     }
 
-    /**
-     * Stops the scheduled data fetching task.
-     */
-    public void stopPollingData() {
-        if (!isPolling) return;
-        scheduler.shutdownNow();
-        isPolling = false;
-        runOnUiThread(() -> showToast("Stopped polling."));
+    public boolean getLatestLiquidStatus() {
+        return latestLiquidStatus;
     }
 
-    /**
-     * Fetches the JSON data string from the ESP32's /data endpoint.
-     */
-    private void fetchLatestData() {
-        String urlString = "http://" + connectedIP + "/data";
-        String jsonResponse = null;
-
-        try {
-            jsonResponse = makeHttpRequest(urlString, true);
-            if (jsonResponse != null) {
-                handleIncomingJSON(jsonResponse);
-            }
-        } catch (Exception e) {
-            // Note: This error is common if the ESP32 is offline or the IP is wrong
-            Log.e(TAG, "Data fetch error from " + urlString + ": " + e.getMessage());
-        }
-    }
-
-    /**
-     * Core method to execute the HTTP GET request.
-     * @param urlString The full URL to request.
-     * @param readResponse Whether to read the response body (true for /data, false for commands)
-     * @return The response body string or null on failure.
-     */
-    private String makeHttpRequest(String urlString, boolean readResponse) throws Exception {
-        HttpURLConnection urlConnection = null;
-        try {
-            URL url = new URL(urlString);
-            urlConnection = (HttpURLConnection) url.openConnection();
-            urlConnection.setRequestMethod("GET");
-            urlConnection.setConnectTimeout(2000);
-            urlConnection.setReadTimeout(2000);
-
-            int responseCode = urlConnection.getResponseCode();
-            if (responseCode == HttpURLConnection.HTTP_OK) {
-                if (readResponse) {
-                    BufferedReader reader = new BufferedReader(new InputStreamReader(urlConnection.getInputStream()));
-                    StringBuilder result = new StringBuilder();
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        result.append(line);
-                    }
-                    reader.close();
-                    return result.toString();
-                } else {
-                    return "Command Sent";
-                }
-            } else {
-                Log.w(TAG, "Server responded with code: " + responseCode + " at " + urlString);
-                return null;
-            }
-        } finally {
-            if (urlConnection != null) {
-                urlConnection.disconnect();
-            }
-        }
-    }
-
-    // ---------------------- DATA PARSING & UI UPDATE ---------------------- //
-
-    /**
-     * Parses the JSON string received from the ESP32 and updates the UI/Database.
-     * Expected JSON structure: {"detection": 1, "status": "ON", "capacity": 85}
-     */
-    private void handleIncomingJSON(String json) {
-        try {
-            final JSONObject jsonObject = new JSONObject(json);
-
-            // 1. Get and process sensor data
-            final int currentDetection = jsonObject.getInt("detection");
-            final String deviceStatus = jsonObject.getString("status");
-            final int liquidCapacity = jsonObject.getInt("capacity");
-
-            // ⭐ LOGIC for Database (Only save detection if one occurred)
-            if (currentDetection == 1) {
-                // IMPORTANT: This logic assumes 'currentDetection' is 1 only when a *new* insect is detected.
-                latestCount = latestCount + 1;
-                final String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(new Date());
-                final Detection detection = new Detection(connectedIP, timestamp, latestCount);
-
-                // Save to database on background thread
-                AppDatabase.databaseWriteExecutor.execute(() -> db.detectionDao().insert(detection));
-            }
-
-            // 2. Update UI on the main thread
-            if (homeFragment != null && homeFragment.isAdded()) {
-                runOnUiThread(() -> {
-                    homeFragment.updateInsectCount(latestCount);
-                    homeFragment.updateSystemStatus(deviceStatus.equals("ON") ? 1 : 0);
-                    homeFragment.updateLiquidStatus(liquidCapacity);
-                });
-            }
-
-        } catch (Exception e) {
-            Log.e(TAG, "JSON/Parse error: " + json + " → " + e.getMessage());
-        }
-    }
-
-    // ---------------------- UTILITIES & NAVIGATION ---------------------- //
+    // --- NAVIGATION ---
 
     private void setupBottomNavigation() {
         binding.bottomNavigationView.setBackground(null);
         binding.bottomNavigationView.setOnItemSelectedListener(item -> {
             int id = item.getItemId();
-            if (id == R.id.home) {
-                replaceFragment(homeFragment, "HOME_FRAGMENT");
-            } else if (id == R.id.bluetooth) {
-                replaceFragment(wifiFragment, "WIFI_FRAGMENT");
-            } else if (id == R.id.history) {
-                replaceFragment(historyFragment, "HISTORY_FRAGMENT");
-            } else if (id == R.id.settings) {
-                replaceFragment(settingsFragment, "SETTINGS_FRAGMENT");
-            }
+            if (id == R.id.home) replaceFragment(homeFragment, "HOME_FRAGMENT");
+            else if (id == R.id.bluetooth) replaceFragment(wifiFragment, "WIFI_FRAGMENT");
+            else if (id == R.id.history) replaceFragment(historyFragment, "HISTORY_FRAGMENT");
+            else if (id == R.id.settings) replaceFragment(settingsFragment, "SETTINGS_FRAGMENT");
             return true;
         });
     }
 
     private void setupFloatingButton() {
         FloatingActionButton fab = findViewById(R.id.fab_refresh);
-        fab.setOnClickListener(v -> fetchLatestData());
+        fab.setOnClickListener(v -> {
+            // Restart service ensures connection is fresh
+            startInsectService();
+            Toast.makeText(this, "Refreshed Connection", Toast.LENGTH_SHORT).show();
+        });
     }
 
     private void replaceFragment(Fragment fragment, String tag) {
@@ -272,23 +184,5 @@ public class MainActivity extends AppCompatActivity {
         FragmentTransaction ft = fm.beginTransaction();
         ft.replace(R.id.frame_layout, fragment, tag);
         ft.commitAllowingStateLoss();
-    }
-
-    private void showToast(String msg) {
-        runOnUiThread(() -> Toast.makeText(this, msg, Toast.LENGTH_SHORT).show());
-    }
-
-    public void fetchLatestCount() {
-        AppDatabase.databaseWriteExecutor.execute(() -> {
-            try {
-                Integer count = db.detectionDao().getTodayTotalCount(connectedIP);
-                latestCount = (count != null) ? count : 0;
-                if(homeFragment != null && homeFragment.isAdded()){
-                    runOnUiThread(() -> homeFragment.updateInsectCount(latestCount));
-                }
-            } catch (Exception e) {
-                Log.e(TAG, "DB fetch error", e);
-            }
-        });
     }
 }
